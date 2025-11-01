@@ -166,29 +166,29 @@ async def chat_stream(request: ChatRequest):
             # Save user message
             await conversation_store.save_message(conversation_id, "user", request.message, request.user_id)
 
-            # Run orchestrator
-            result = await orchestrator.run(
+            # Stream from orchestrator (real LLM streaming)
+            full_response = ""
+            final_state = None
+
+            async for chunk, state in orchestrator.run_stream(
                 query=request.message,
                 user_id=request.user_id,
                 conversation_id=conversation_id,
                 conversation_history=history,
                 is_button_click=request.is_button_click
-            )
-
-            # Stream the response in chunks
-            response_text = result["final_response"]
-            chunk_size = 50
-            for i in range(0, len(response_text), chunk_size):
-                chunk = response_text[i:i+chunk_size]
+            ):
+                # Stream each chunk as it comes from the LLM
+                full_response += chunk
+                final_state = state
                 yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
 
-            # Get menu data from nested structure
-            menu_data = result.get("menu", {})
+            # Get menu data from final state
+            menu_data = final_state.get("menu", {}) if final_state else {}
 
             # Build metadata with menu information
             metadata = {
                 'type': 'done',
-                'route': result.get("route", "unknown"),
+                'route': final_state.get("route", "unknown") if final_state else "unknown",
                 'correlation_id': correlation_id,
                 'is_menu': menu_data.get("is_menu", False),
                 'menu_type': menu_data.get("menu_type")
@@ -201,7 +201,7 @@ async def chat_stream(request: ChatRequest):
             yield f"data: {json.dumps(metadata)}\n\n"
 
             # Save assistant message
-            await conversation_store.save_message(conversation_id, "assistant", response_text, request.user_id)
+            await conversation_store.save_message(conversation_id, "assistant", full_response.strip(), request.user_id)
 
             # Send completion event
             yield f"data: {json.dumps({'type': 'end'})}\n\n"

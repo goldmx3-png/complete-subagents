@@ -35,6 +35,112 @@ class RAGAgent(BaseAgent):
         """Check if RAG agent should handle this"""
         return state.get("route") in ["RAG_ONLY", "RAG_THEN_API"]
 
+    async def execute_stream(self, state: AgentState):
+        """
+        Execute RAG pipeline with streaming response
+
+        Yields:
+            Tuple of (chunk_text, state) where state is updated at the end
+        """
+        self._log_start("RAG pipeline (streaming)")
+
+        # Initialize RAG state
+        if "rag" not in state:
+            state["rag"] = RAGState(
+                chunks=[],
+                context="",
+                is_ambiguous=False,
+                disambiguation_options=[],
+                reformulated_query=None
+            )
+
+        try:
+            query = state["query"]
+            user_id = state["user_id"]
+            conversation_history = state.get("conversation_history", [])
+
+            logger.info(f"RAG pipeline (streaming): user={user_id}, query={query[:100]}")
+
+            # Step 1: Retrieve with context-aware reformulation
+            if conversation_history:
+                logger.info("Using context-aware retrieval for follow-up handling")
+                retrieval_result = await self.retriever.retrieve_with_context(
+                    query=query,
+                    user_id=user_id,
+                    conversation_history=conversation_history
+                )
+            else:
+                retrieval_result = await self.retriever.retrieve(
+                    query=query,
+                    user_id=user_id
+                )
+
+            # Extract retrieval results
+            chunks = retrieval_result.get("chunks", [])
+            is_ambiguous = retrieval_result.get("is_ambiguous", False)
+            disambiguation_options = retrieval_result.get("disambiguation_options", [])
+
+            state["rag"]["chunks"] = chunks
+            state["rag"]["is_ambiguous"] = is_ambiguous
+            state["rag"]["disambiguation_options"] = disambiguation_options
+            state["rag"]["reformulated_query"] = retrieval_result.get("query")
+
+            logger.info(f"Retrieved {len(chunks)} chunks, ambiguous={is_ambiguous}")
+
+            # Step 2: Handle ambiguity
+            if is_ambiguous and disambiguation_options:
+                clarification = self.retriever.format_disambiguation_question(
+                    query=query,
+                    options=disambiguation_options
+                )
+                state["final_response"] = clarification
+                yield clarification, state
+                return
+
+            # Step 3: Check if we found relevant information
+            if not chunks:
+                no_info_msg = "I don't have information about that. Could you rephrase your question or ask about something else?"
+                state["final_response"] = no_info_msg
+                yield no_info_msg, state
+                return
+
+            # Step 4: Format context
+            context = self.retriever.format_context(
+                chunks=chunks,
+                max_chunks=settings.max_chunks_per_query
+            )
+            state["rag"]["context"] = context
+
+            # Step 5: Analyze retrieval quality
+            avg_score = sum(c.get("score", 0) for c in chunks[:5]) / min(len(chunks), 5)
+            retrieval_quality = "high" if avg_score >= 0.7 else "medium" if avg_score >= 0.4 else "low"
+            logger.info(f"Retrieval quality: {retrieval_quality} (avg_score={avg_score:.2f})")
+
+            # Step 6: Stream answer generation
+            full_response = ""
+            async for chunk in self._generate_answer_stream(
+                query=query,
+                context=context,
+                conversation_history=conversation_history,
+                retrieval_quality=retrieval_quality
+            ):
+                full_response += chunk
+                yield chunk, state
+
+            # Update state with final response
+            state["final_response"] = full_response.strip()
+            logger.info(f"Streaming complete, total length={len(full_response)}")
+
+            self._log_complete("RAG pipeline (streaming)", chunks_retrieved=len(chunks))
+
+        except Exception as e:
+            self._log_error("RAG pipeline (streaming)", e)
+            logger.error(f"RAG agent streaming error: {str(e)}", exc_info=True)
+            error_msg = "I encountered an error while retrieving information. Please try again."
+            state["error"] = str(e)
+            state["final_response"] = error_msg
+            yield error_msg, state
+
     async def execute(self, state: AgentState) -> AgentState:
         """Execute advanced RAG pipeline"""
         self._log_start("RAG pipeline")
@@ -96,7 +202,7 @@ class RAGAgent(BaseAgent):
 
             # Step 3: Check if we found relevant information
             if not chunks:
-                state["final_response"] = "I don't have information about that in my knowledge base. Could you rephrase your question or ask about something else?"
+                state["final_response"] = "I don't have information about that. Could you rephrase your question or ask about something else?"
                 logger.warning("No relevant chunks found")
                 self._log_complete("RAG pipeline", status="no_results")
                 return state
@@ -110,11 +216,17 @@ class RAGAgent(BaseAgent):
 
             logger.info(f"Context formatted, length={len(context)}")
 
-            # Step 5: Generate answer with context
+            # Step 5: Analyze retrieval quality for confidence-based generation
+            avg_score = sum(c.get("score", 0) for c in chunks[:5]) / min(len(chunks), 5)
+            retrieval_quality = "high" if avg_score >= 0.7 else "medium" if avg_score >= 0.4 else "low"
+            logger.info(f"Retrieval quality: {retrieval_quality} (avg_score={avg_score:.2f})")
+
+            # Step 6: Generate answer with context and quality indicator
             answer = await self._generate_answer(
                 query=query,
                 context=context,
-                conversation_history=conversation_history
+                conversation_history=conversation_history,
+                retrieval_quality=retrieval_quality
             )
 
             state["final_response"] = answer
@@ -134,7 +246,8 @@ class RAGAgent(BaseAgent):
         self,
         query: str,
         context: str,
-        conversation_history: List[Dict]
+        conversation_history: List[Dict],
+        retrieval_quality: str = "medium"
     ) -> str:
         """
         Generate answer using LLM with retrieved context
@@ -143,21 +256,33 @@ class RAGAgent(BaseAgent):
             query: User's question
             context: Retrieved document context
             conversation_history: Previous conversation turns
+            retrieval_quality: Quality of retrieval ("high", "medium", or "low")
 
         Returns:
             Generated answer
         """
-        system_prompt = """You are a helpful banking assistant. Answer questions naturally and conversationally based on the provided context.
+        system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
 
-Your role is to help users understand banking operations and functionalities.
+CRITICAL RULES - Response Style:
+1. Answer naturally as an expert - NEVER mention "context", "documents", or "provided information"
+2. Speak as if you inherently know this - use phrases like "The Cut-off master is..." not "Based on the context, it seems..."
+3. NEVER say "based on the information provided" or similar phrases that expose you're reading documents
+4. Be definitive and authoritative - you are the expert they're asking
+5. NEVER suggest "consult documentation", "ask someone else", or "contact support"
+6. NEVER use hedging phrases like "I don't have detailed information" unless you truly have zero information
 
-Important guidelines:
-- Use ONLY the information provided in the context
-- Answer in a natural, conversational tone - like you're talking to a colleague
-- Be direct and helpful without being overly formal
-- If the context doesn't contain the answer, politely say "I don't know" or "I don't have that information"
-- Don't make up information or make assumptions beyond what's in the context
-- Keep responses concise and focused on the user's question"""
+CRITICAL RULES - Accuracy:
+1. Answer using ONLY the factual information available to you (never invent facts)
+2. If you don't have information about something, simply say "I don't have information about that"
+3. Synthesize information to give complete, coherent explanations
+4. When explaining technical terms, provide clear definitions as an expert would
+
+Response Guidelines:
+- Natural, conversational tone - like a knowledgeable colleague explaining something
+- Direct and confident explanations
+- Keep responses focused and concise
+- No references to "context", "documents", "provided information", or "based on"
+- Just answer as if you know it yourself"""
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -170,8 +295,16 @@ Important guidelines:
                     content = content[:500] + "..."
                 messages.append({"role": msg["role"], "content": content})
 
-        # Add current query with context
-        user_message = f"""Context from documents:
+        # Add current query with context and quality-based instructions
+        quality_instruction = ""
+        if retrieval_quality == "high":
+            quality_instruction = "Answer with full confidence."
+        elif retrieval_quality == "medium":
+            quality_instruction = "Synthesize the available information to give a complete answer."
+        else:
+            quality_instruction = "Only answer if you have clear information about this."
+
+        user_message = f"""Available knowledge:
 
 {context}
 
@@ -179,7 +312,7 @@ Important guidelines:
 
 Question: {query}
 
-Please answer the question based ONLY on the context provided above."""
+Instructions: {quality_instruction} Remember to answer naturally as an expert - never mention "context", "documents", or "provided information" in your response."""
 
         messages.append({"role": "user", "content": user_message})
 
@@ -187,12 +320,100 @@ Please answer the question based ONLY on the context provided above."""
             answer = await self.llm.chat(
                 messages=messages,
                 temperature=settings.temperature,
-                max_tokens=settings.max_tokens
+                max_tokens=settings.max_tokens,
+                stream=False  # Non-streaming by default
             )
             return answer.strip()
         except Exception as e:
             logger.error(f"Answer generation error: {str(e)}")
             return "I encountered an issue generating an answer. Please try rephrasing your question."
+
+    async def _generate_answer_stream(
+        self,
+        query: str,
+        context: str,
+        conversation_history: List[Dict],
+        retrieval_quality: str = "medium"
+    ):
+        """
+        Generate answer using LLM with streaming
+
+        Args:
+            query: User's question
+            context: Retrieved document context
+            conversation_history: Previous conversation turns
+            retrieval_quality: Quality of retrieval ("high", "medium", or "low")
+
+        Yields:
+            Streamed content chunks
+        """
+        system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
+
+CRITICAL RULES - Response Style:
+1. Answer naturally as an expert - NEVER mention "context", "documents", or "provided information"
+2. Speak as if you inherently know this - use phrases like "The Cut-off master is..." not "Based on the context, it seems..."
+3. NEVER say "based on the information provided" or similar phrases that expose you're reading documents
+4. Be definitive and authoritative - you are the expert they're asking
+5. NEVER suggest "consult documentation", "ask someone else", or "contact support"
+6. NEVER use hedging phrases like "I don't have detailed information" unless you truly have zero information
+
+CRITICAL RULES - Accuracy:
+1. Answer using ONLY the factual information available to you (never invent facts)
+2. If you don't have information about something, simply say "I don't have information about that"
+3. Synthesize information to give complete, coherent explanations
+4. When explaining technical terms, provide clear definitions as an expert would
+
+Response Guidelines:
+- Natural, conversational tone - like a knowledgeable colleague explaining something
+- Direct and confident explanations
+- Keep responses focused and concise
+- No references to "context", "documents", "provided information", or "based on"
+- Just answer as if you know it yourself"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add recent conversation history (last 3-4 exchanges)
+        for msg in conversation_history[-6:]:
+            if msg.get("role") in ["user", "assistant"]:
+                content = msg.get("content", "")
+                # Truncate very long messages
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                messages.append({"role": msg["role"], "content": content})
+
+        # Add current query with context and quality-based instructions
+        quality_instruction = ""
+        if retrieval_quality == "high":
+            quality_instruction = "Answer with full confidence."
+        elif retrieval_quality == "medium":
+            quality_instruction = "Synthesize the available information to give a complete answer."
+        else:
+            quality_instruction = "Only answer if you have clear information about this."
+
+        user_message = f"""Available knowledge:
+
+{context}
+
+---
+
+Question: {query}
+
+Instructions: {quality_instruction} Remember to answer naturally as an expert - never mention "context", "documents", or "provided information" in your response."""
+
+        messages.append({"role": "user", "content": user_message})
+
+        try:
+            # Stream from LLM
+            async for chunk in await self.llm.chat(
+                messages=messages,
+                temperature=settings.temperature,
+                max_tokens=settings.max_tokens,
+                stream=True
+            ):
+                yield chunk
+        except Exception as e:
+            logger.error(f"Streaming answer generation error: {str(e)}")
+            yield "I encountered an issue generating an answer. Please try rephrasing your question."
 
     def get_name(self) -> str:
         return "RAGAgent"

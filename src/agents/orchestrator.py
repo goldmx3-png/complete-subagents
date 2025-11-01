@@ -208,3 +208,95 @@ class OrchestratorAgent:
             initial_state["error"] = str(e)
             initial_state["final_response"] = "I encountered an error processing your request. Please try again."
             return initial_state
+
+    async def run_stream(self, query: str, user_id: str, conversation_id: Optional[str] = None,
+                         conversation_history: Optional[List[Dict]] = None,
+                         is_button_click: bool = False):
+        """
+        Run orchestrator with streaming for RAG responses
+
+        Args:
+            query: User query
+            user_id: User ID
+            conversation_id: Optional conversation ID
+            conversation_history: Optional conversation history
+            is_button_click: Whether this is a button click
+
+        Yields:
+            Tuple of (chunk_text, state) - state is complete only at the end
+        """
+        start_time = time.time()
+        logger.info(f"Orchestrator run (streaming): user_id={user_id}, query_len={len(query)}")
+
+        # Detect if this is the first message
+        is_first_message = not conversation_history or len(conversation_history) == 0
+
+        # Initialize state
+        initial_state = AgentState(
+            query=query,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            conversation_history=conversation_history or [],
+            route="",
+            route_reasoning="",
+            rag=RAGState(chunks=[], context="", is_ambiguous=False, disambiguation_options=[]),
+            api=APIState(product=None, available_apis=[], selected_apis=[], api_responses=[], needs_clarification=False),
+            menu=MenuState(intent=None, menu_buttons=[], is_menu=False),
+            support=SupportState(faq_result=None, ticket_id=None),
+            active_agent=None,
+            final_response="",
+            error=None,
+            metadata={},
+            is_button_click=is_button_click,
+            is_first_message=is_first_message,
+            in_menu_flow=False
+        )
+
+        try:
+            # Step 1: Detect intent (same as regular flow)
+            state = await self._detect_intent_node(initial_state)
+            route = state.get("route", "RAG_ONLY")
+
+            logger.info(f"Streaming route detected: {route}")
+
+            # Step 2: Execute appropriate agent
+            if route in ["RAG_ONLY", "RAG_THEN_API"] and hasattr(self.rag_agent, 'execute_stream'):
+                # RAG agent with streaming
+                state["active_agent"] = "RAGAgent"
+                async for chunk, updated_state in self.rag_agent.execute_stream(state):
+                    yield chunk, updated_state
+
+                duration_ms = (time.time() - start_time) * 1000
+                logger.info(f"Streaming RAG complete in {duration_ms:.0f}ms")
+
+            elif route == "MENU":
+                # Menu agent (non-streaming - fast response)
+                state["active_agent"] = "MenuAgent"
+                state = await self.menu_agent.execute(state)
+                yield state["final_response"], state
+
+            elif route == "API_ONLY":
+                # API agent (non-streaming - fast response)
+                state["active_agent"] = "APIAgent"
+                state = await self.api_agent.execute(state)
+                yield state["final_response"], state
+
+            elif route == "SUPPORT":
+                # Support agent (non-streaming - fast response)
+                state["active_agent"] = "SupportAgent"
+                state = await self.support_agent.execute(state)
+                yield state["final_response"], state
+
+            else:
+                # Default to RAG
+                state["active_agent"] = "RAGAgent"
+                async for chunk, updated_state in self.rag_agent.execute_stream(state):
+                    yield chunk, updated_state
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"Streaming orchestrator error after {duration_ms:.0f}ms: {e}", exc_info=True)
+            initial_state["error"] = str(e)
+            error_msg = "I encountered an error processing your request. Please try again."
+            initial_state["final_response"] = error_msg
+            yield error_msg, initial_state

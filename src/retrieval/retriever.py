@@ -230,6 +230,9 @@ class RAGRetriever:
         """
         Detect if results are ambiguous (from different contexts)
 
+        IMPORTANT: This should only trigger when there are TRULY different topics,
+        not when there are duplicate chunks or similar content.
+
         Args:
             results: Search results
 
@@ -239,7 +242,23 @@ class RAGRetriever:
         if len(results) < 2:
             return False, []
 
-        # Group by section/document
+        # Step 1: Check for duplicate content
+        # If top chunks have the same text, it's NOT ambiguous
+        top_texts = []
+        for result in results[:5]:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")[:200].strip().lower()
+            top_texts.append(text)
+
+        # If all texts are very similar (duplicates), not ambiguous
+        if top_texts:
+            first_text = top_texts[0]
+            similar_count = sum(1 for t in top_texts if t == first_text or t[:100] == first_text[:100])
+            if similar_count >= len(top_texts) * 0.6:  # 60%+ are duplicates
+                logger.info("Duplicate content detected - not marking as ambiguous")
+                return False, []
+
+        # Step 2: Group by section/document
         sections = {}
 
         for result in results[:5]:  # Check top 5
@@ -253,7 +272,8 @@ class RAGRetriever:
                     "doc_id": doc,
                     "section": section,
                     "chunks": [],
-                    "max_score": 0.0
+                    "max_score": 0.0,
+                    "text_sample": payload.get("text", "")[:100]
                 }
 
             sections[key]["chunks"].append(result)
@@ -262,24 +282,37 @@ class RAGRetriever:
                 result.get("score", 0)
             )
 
-        # Check if multiple sections with similar scores
+        # Step 3: Check if content is actually different across sections
+        if len(sections) > 1:
+            text_samples = [s["text_sample"].lower() for s in sections.values()]
+            unique_texts = set(text_samples)
+
+            # If all sections have the same content, not ambiguous
+            if len(unique_texts) == 1:
+                logger.info("All sections have identical content - not ambiguous")
+                return False, []
+
+        # Step 4: Very conservative ambiguity detection
+        # ONLY trigger if there are clearly DIFFERENT topics with similar relevance
         if len(sections) > 1:
             scores = [s["max_score"] for s in sections.values()]
             max_score = max(scores)
             min_score = min(scores)
 
-            # Conservative ambiguity detection:
-            # Only mark as ambiguous if:
-            # 1. Multiple sections from different documents
-            # 2. All scores are similarly low (< 0.55)
-            # 3. Scores are very close (within threshold)
+            # MUCH more conservative criteria:
+            # 1. At least 4 different documents (not just 3)
+            # 2. Scores must be VERY low (< 0.45) - meaning we're really unsure
+            # 3. Scores must be extremely close (< 0.10 difference)
+            # 4. No single clear winner
             unique_docs = set(s["doc_id"] for s in sections.values())
-            good_sections = [s for s in sections.values() if s["max_score"] > 0.45]
+            good_sections = [s for s in sections.values() if s["max_score"] > 0.35]
 
-            if (len(unique_docs) >= 3 and
-                max_score < 0.55 and
-                (max_score - min_score) < settings.ambiguity_threshold and
-                len(good_sections) >= 3):
+            # DISABLED FOR NOW - causing too many false positives
+            # Only enable if you have a specific use case for disambiguation
+            if False and (len(unique_docs) >= 4 and
+                max_score < 0.45 and
+                (max_score - min_score) < 0.10 and
+                len(good_sections) >= 4):
 
                 # Create disambiguation options
                 options = []
@@ -305,28 +338,38 @@ class RAGRetriever:
         max_chunks: Optional[int] = None
     ) -> str:
         """
-        Format retrieved chunks into context for LLM
+        Format retrieved chunks into context for LLM with metadata
 
         Args:
             chunks: Retrieved chunks
             max_chunks: Maximum chunks to include
 
         Returns:
-            Formatted context string
+            Formatted context string with section titles and relevance info
         """
         max_chunks = max_chunks or settings.max_chunks_per_query
 
         # Take top chunks
         top_chunks = chunks[:max_chunks]
 
-        # Format without citations - just clean text
+        # Format with structure to help LLM understand available information
         formatted_chunks = []
-        for chunk in top_chunks:
+        for i, chunk in enumerate(top_chunks, 1):
             payload = chunk.get("payload", {})
             text = payload.get("text", "")
-            formatted_chunks.append(text)
+            section_title = payload.get("section_title", "General Information")
+            doc_id = payload.get("doc_id", "Document")
+            score = chunk.get("score", 0.0)
 
-        return "\n\n".join(formatted_chunks)
+            # Format with metadata to boost LLM confidence
+            chunk_text = f"[Chunk {i}] From: {doc_id}"
+            if section_title and section_title != "General Information":
+                chunk_text += f", Section: {section_title}"
+            chunk_text += f"\nRelevance: {score:.2f}\n{text}"
+
+            formatted_chunks.append(chunk_text)
+
+        return "\n\n---\n\n".join(formatted_chunks)
 
     def format_disambiguation_question(
         self,
