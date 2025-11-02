@@ -82,19 +82,25 @@ class UnifiedClassifier:
 
 **Intent Classification:**
 
+🔹 **CAPABILITY** (Direct Answer - No Agent Needed):
+- Questions asking about the AI assistant's capabilities
+- Meta-questions about what the system can do
+- Examples:
+  - "What can you do?"
+  - "What are your capabilities?"
+  - "How can you help me?"
+  - "What can you help me with?"
+
 🔹 **RAG** (Retrieval-Augmented Generation):
 - Policy questions (interest rates, terms, conditions, eligibility, features)
 - General information about banking products
 - "How to" questions about processes
 - Educational/informational queries
-- Capability questions about what the assistant can do
 - Examples:
   - "What is the interest rate for savings accounts?"
   - "What are the eligibility criteria for home loans?"
   - "Tell me about credit card rewards programs"
   - "How do I apply for a personal loan?"
-  - "What can you do?", "What can you help me with?"
-  - "What are your capabilities?"
 
 🔹 **API** (Real-time Banking Data):
 - Live account data (balance, status, details)
@@ -127,18 +133,25 @@ class UnifiedClassifier:
 **Response Format:**
 Return ONLY valid JSON (no markdown, no explanation):
 {
-  "intent": "rag" | "api" | "menu",
+  "intent": "capability" | "rag" | "api" | "menu",
   "product": "payments" | "accounts" | "cards" | "loans" | null,
   "reasoning": "Brief explanation of classification",
-  "confidence": 0.0-1.0
+  "confidence": 0.0-1.0,
+  "direct_answer": "answer text here" (ONLY if intent is "capability")
 }
 
 **Important Rules:**
+- If asking about AI assistant capabilities → CAPABILITY + provide direct_answer
 - If asking about policies/information → RAG
 - If asking about live data/status → API + product
+- For CAPABILITY intent, provide a concise, friendly direct_answer explaining what the AI assistant can help with
 - Use conversation history for context if provided
 - Be confident in your classification
-- Product is null unless intent is API"""
+- Product is null unless intent is API
+
+**Direct Answer Template for CAPABILITY:**
+"I'm an AI banking assistant. I can help you with: finding information from documents, answering questions about banking operations, policies, procedures, transactions, accounts, and providing general banking assistance. How can I assist you today?"
+"""
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -177,12 +190,18 @@ Return ONLY valid JSON (no markdown, no explanation):
                 raise ValueError("Missing 'intent' field")
 
             # Validate intent value
-            valid_intents = ["rag", "api", "menu"]
+            valid_intents = ["capability", "rag", "api", "menu"]
             if result["intent"] not in valid_intents:
                 raise ValueError(f"Invalid intent: {result['intent']}")
 
+            # Validate and handle capability intent
+            if result["intent"] == "capability":
+                # Ensure direct_answer is present for capability questions
+                if "direct_answer" not in result or not result["direct_answer"]:
+                    result["direct_answer"] = "I'm an AI banking assistant. I can help you with finding information from documents, answering questions about banking operations, policies, procedures, transactions, accounts, and more. How can I assist you today?"
+                result["product"] = None
             # Validate product if API intent
-            if result["intent"] == "api":
+            elif result["intent"] == "api":
                 valid_products = ["payments", "accounts", "cards", "loans"]
                 if result.get("product") not in valid_products:
                     logger.warning(f"Invalid or missing product for API intent: {result.get('product')}")

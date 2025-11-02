@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Tuple
 from src.vectorstore.qdrant_store import QdrantStore
 from src.vectorstore.embeddings import EmbeddingsModel
 from src.retrieval.query_rewriter import QueryRewriter
+from src.retrieval.context_organizer import smart_organize_context, auto_detect_structure
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -335,7 +336,8 @@ class RAGRetriever:
     def format_context(
         self,
         chunks: List[Dict],
-        max_chunks: Optional[int] = None
+        max_chunks: Optional[int] = None,
+        use_smart_organization: bool = True
     ) -> str:
         """
         Format retrieved chunks into context for LLM with metadata
@@ -343,13 +345,18 @@ class RAGRetriever:
         Args:
             chunks: Retrieved chunks
             max_chunks: Maximum chunks to include
+            use_smart_organization: Whether to use smart organization (groups by section/doc)
 
         Returns:
             Formatted context string with section titles and relevance info
         """
         max_chunks = max_chunks or settings.max_chunks_per_query
 
-        # Take top chunks
+        # Use smart organization if enabled
+        if use_smart_organization:
+            return smart_organize_context(chunks, max_chunks)
+
+        # Fallback to original simple formatting
         top_chunks = chunks[:max_chunks]
 
         # Format with structure to help LLM understand available information

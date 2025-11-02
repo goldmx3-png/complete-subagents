@@ -68,7 +68,8 @@ class OrchestratorAgent:
                 "rag": "rag",
                 "menu": "menu",
                 "api": "api",
-                "support": "support"
+                "support": "support",
+                END: END  # Direct answer capability questions
             }
         )
 
@@ -113,6 +114,16 @@ class OrchestratorAgent:
             product = classification.get("product")
             reasoning = classification.get("reasoning", "")
             confidence = classification.get("confidence", 0)
+            direct_answer = classification.get("direct_answer")
+
+            # Handle direct answers from capability questions
+            if intent == "capability" and direct_answer:
+                state["route"] = "DIRECT_ANSWER"
+                state["route_reasoning"] = f"capability-direct (confidence={confidence:.2f}): {reasoning}"
+                state["final_response"] = direct_answer
+                state["active_agent"] = "Classifier"
+                logger.info(f"Direct capability answer provided (confidence={confidence:.2f})")
+                return state
 
             # Map classifier intents to route strings
             route_map = {
@@ -144,7 +155,9 @@ class OrchestratorAgent:
         """Route to appropriate agent based on detected intent"""
         route = state.get("route", "RAG_ONLY")
 
-        if route == "MENU":
+        if route == "DIRECT_ANSWER":
+            return END  # End workflow immediately for direct answers
+        elif route == "MENU":
             return "menu"
         elif route == "SUPPORT":
             return "support"
@@ -259,7 +272,13 @@ class OrchestratorAgent:
 
             logger.info(f"Streaming route detected: {route}")
 
-            # Step 2: Execute appropriate agent
+            # Step 2: Handle direct answers (capability questions)
+            if route == "DIRECT_ANSWER":
+                # Direct answer already in state, yield it immediately
+                yield state["final_response"], state
+                return
+
+            # Step 3: Execute appropriate agent
             if route in ["RAG_ONLY", "RAG_THEN_API"] and hasattr(self.rag_agent, 'execute_stream'):
                 # RAG agent with streaming
                 state["active_agent"] = "RAGAgent"

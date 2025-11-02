@@ -8,6 +8,7 @@ from src.agents.base import BaseAgent
 from src.agents.shared.state import AgentState, RAGState
 from src.llm.openrouter_client import OpenRouterClient
 from src.retrieval import RAGRetriever
+from src.retrieval.context_organizer import auto_detect_structure, get_adaptive_system_prompt, format_context_note
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -97,14 +98,8 @@ class RAGAgent(BaseAgent):
                 yield clarification, state
                 return
 
-            # Step 3: Check if we found relevant information
-            if not chunks:
-                no_info_msg = "I don't have information about that. Could you rephrase your question or ask about something else?"
-                state["final_response"] = no_info_msg
-                yield no_info_msg, state
-                return
-
-            # Step 4: Format context
+            # Step 3: Format context (even if empty - LLM can handle capability questions)
+            # No early exit for empty chunks - let LLM decide based on question type
             context = self.retriever.format_context(
                 chunks=chunks,
                 max_chunks=settings.max_chunks_per_query
@@ -112,9 +107,13 @@ class RAGAgent(BaseAgent):
             state["rag"]["context"] = context
 
             # Step 5: Analyze retrieval quality
-            avg_score = sum(c.get("score", 0) for c in chunks[:5]) / min(len(chunks), 5)
-            retrieval_quality = "high" if avg_score >= 0.7 else "medium" if avg_score >= 0.4 else "low"
-            logger.info(f"Retrieval quality: {retrieval_quality} (avg_score={avg_score:.2f})")
+            if chunks:
+                avg_score = sum(c.get("score", 0) for c in chunks[:5]) / min(len(chunks), 5)
+                retrieval_quality = "high" if avg_score >= 0.7 else "medium" if avg_score >= 0.4 else "low"
+                logger.info(f"Retrieval quality: {retrieval_quality} (avg_score={avg_score:.2f})")
+            else:
+                retrieval_quality = "none"
+                logger.info("No chunks retrieved - relying on LLM general knowledge")
 
             # Step 6: Stream answer generation
             full_response = ""
@@ -122,7 +121,8 @@ class RAGAgent(BaseAgent):
                 query=query,
                 context=context,
                 conversation_history=conversation_history,
-                retrieval_quality=retrieval_quality
+                retrieval_quality=retrieval_quality,
+                chunks=chunks
             ):
                 full_response += chunk
                 yield chunk, state
@@ -200,14 +200,12 @@ class RAGAgent(BaseAgent):
                 self._log_complete("RAG pipeline", status="needs_clarification")
                 return state
 
-            # Step 3: Check if we found relevant information
+            # Step 3: Format context for LLM (even if empty - LLM can handle capability questions)
+            # No early exit for empty chunks - let LLM decide based on question type
             if not chunks:
-                state["final_response"] = "I don't have information about that. Could you rephrase your question or ask about something else?"
-                logger.warning("No relevant chunks found")
-                self._log_complete("RAG pipeline", status="no_results")
-                return state
+                logger.info("No chunks found - letting LLM handle from general knowledge")
 
-            # Step 4: Format context for LLM
+            #Step 4: Format context for LLM
             context = self.retriever.format_context(
                 chunks=chunks,
                 max_chunks=settings.max_chunks_per_query
@@ -217,16 +215,21 @@ class RAGAgent(BaseAgent):
             logger.info(f"Context formatted, length={len(context)}")
 
             # Step 5: Analyze retrieval quality for confidence-based generation
-            avg_score = sum(c.get("score", 0) for c in chunks[:5]) / min(len(chunks), 5)
-            retrieval_quality = "high" if avg_score >= 0.7 else "medium" if avg_score >= 0.4 else "low"
-            logger.info(f"Retrieval quality: {retrieval_quality} (avg_score={avg_score:.2f})")
+            if chunks:
+                avg_score = sum(c.get("score", 0) for c in chunks[:5]) / min(len(chunks), 5)
+                retrieval_quality = "high" if avg_score >= 0.7 else "medium" if avg_score >= 0.4 else "low"
+                logger.info(f"Retrieval quality: {retrieval_quality} (avg_score={avg_score:.2f})")
+            else:
+                retrieval_quality = "none"
+                logger.info("No chunks retrieved - relying on LLM general knowledge")
 
             # Step 6: Generate answer with context and quality indicator
             answer = await self._generate_answer(
                 query=query,
                 context=context,
                 conversation_history=conversation_history,
-                retrieval_quality=retrieval_quality
+                retrieval_quality=retrieval_quality,
+                chunks=chunks
             )
 
             state["final_response"] = answer
@@ -247,7 +250,8 @@ class RAGAgent(BaseAgent):
         query: str,
         context: str,
         conversation_history: List[Dict],
-        retrieval_quality: str = "medium"
+        retrieval_quality: str = "medium",
+        chunks: Optional[List[Dict]] = None
     ) -> str:
         """
         Generate answer using LLM with retrieved context
@@ -257,11 +261,19 @@ class RAGAgent(BaseAgent):
             context: Retrieved document context
             conversation_history: Previous conversation turns
             retrieval_quality: Quality of retrieval ("high", "medium", or "low")
+            chunks: Optional retrieved chunks for structure detection
 
         Returns:
             Generated answer
         """
-        system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
+        # Detect structure and get adaptive prompt
+        if chunks:
+            structure = auto_detect_structure(chunks)
+            system_prompt = get_adaptive_system_prompt(structure)
+            context_note = format_context_note(structure)
+        else:
+            # Fallback to original prompt
+            system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
 
 CRITICAL RULES - Response Style:
 1. Answer naturally as an expert - NEVER mention "context", "documents", or "provided information"
@@ -283,6 +295,7 @@ Response Guidelines:
 - Keep responses focused and concise
 - No references to "context", "documents", "provided information", or "based on"
 - Just answer as if you know it yourself"""
+            context_note = ""
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -305,7 +318,7 @@ Response Guidelines:
             quality_instruction = "Only answer if you have clear information about this."
 
         user_message = f"""Available knowledge:
-
+{context_note}
 {context}
 
 ---
@@ -333,7 +346,8 @@ Instructions: {quality_instruction} Remember to answer naturally as an expert - 
         query: str,
         context: str,
         conversation_history: List[Dict],
-        retrieval_quality: str = "medium"
+        retrieval_quality: str = "medium",
+        chunks: Optional[List[Dict]] = None
     ):
         """
         Generate answer using LLM with streaming
@@ -343,11 +357,19 @@ Instructions: {quality_instruction} Remember to answer naturally as an expert - 
             context: Retrieved document context
             conversation_history: Previous conversation turns
             retrieval_quality: Quality of retrieval ("high", "medium", or "low")
+            chunks: Optional retrieved chunks for structure detection
 
         Yields:
             Streamed content chunks
         """
-        system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
+        # Detect structure and get adaptive prompt
+        if chunks:
+            structure = auto_detect_structure(chunks)
+            system_prompt = get_adaptive_system_prompt(structure)
+            context_note = format_context_note(structure)
+        else:
+            # Fallback to original prompt
+            system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
 
 CRITICAL RULES - Response Style:
 1. Answer naturally as an expert - NEVER mention "context", "documents", or "provided information"
@@ -369,6 +391,7 @@ Response Guidelines:
 - Keep responses focused and concise
 - No references to "context", "documents", "provided information", or "based on"
 - Just answer as if you know it yourself"""
+            context_note = ""
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -391,7 +414,7 @@ Response Guidelines:
             quality_instruction = "Only answer if you have clear information about this."
 
         user_message = f"""Available knowledge:
-
+{context_note}
 {context}
 
 ---
