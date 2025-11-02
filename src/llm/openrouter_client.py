@@ -3,12 +3,15 @@
 import httpx
 import json
 import time
-from typing import List, Dict, Optional, AsyncIterator
+from typing import List, Dict, Optional, AsyncIterator, Type, TypeVar
+from pydantic import BaseModel
 from src.config import settings
 from src.utils.logger import get_logger
 from src.utils.metrics import log_llm_metrics
 
 logger = get_logger(__name__)
+
+T = TypeVar('T', bound=BaseModel)
 
 
 class OpenRouterClient:
@@ -90,6 +93,65 @@ class OpenRouterClient:
         except Exception as e:
             logger.error(f"Stream error: {str(e)}")
             yield "\n\n[Stream error. Please try again.]"
+
+    async def structured_output(
+        self,
+        prompt: str,
+        response_model: Type[T],
+        temperature: float = 0
+    ) -> T:
+        """
+        Get structured output using Pydantic model
+
+        Args:
+            prompt: User prompt
+            response_model: Pydantic model class for response
+            temperature: Temperature for generation
+
+        Returns:
+            Instance of response_model
+        """
+        # Create a system message that instructs JSON output
+        schema = response_model.model_json_schema()
+
+        system_message = f"""You must respond with valid JSON that matches this exact schema:
+
+{json.dumps(schema, indent=2)}
+
+Respond ONLY with valid JSON. No other text."""
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            response_text = await self.chat(
+                messages=messages,
+                temperature=temperature,
+                stream=False
+            )
+
+            # Extract JSON from response (sometimes models add markdown)
+            response_text = response_text.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+
+            # Parse into Pydantic model
+            response_data = json.loads(response_text)
+            return response_model(**response_data)
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse structured output: {e}\nResponse: {response_text[:200]}")
+            raise
+        except Exception as e:
+            logger.error(f"Structured output error: {e}")
+            raise
 
     async def close(self):
         """Close HTTP client"""

@@ -67,6 +67,39 @@ class Settings(BaseSettings):
     use_query_rewriting: bool = os.getenv("USE_QUERY_REWRITING", "true").lower() == "true"
     query_rewrite_cache_ttl: int = int(os.getenv("QUERY_REWRITE_CACHE_TTL", "86400"))  # 24 hours
 
+    # Agentic RAG Settings
+    use_agentic_rag: bool = os.getenv("USE_AGENTIC_RAG", "false").lower() == "true"
+    agentic_max_retries: int = int(os.getenv("AGENTIC_MAX_RETRIES", "2"))
+    agentic_relevance_threshold: float = float(os.getenv("AGENTIC_RELEVANCE_THRESHOLD", "0.6"))
+
+    # Advanced RAG Settings
+    use_hierarchical_chunking: bool = os.getenv("USE_HIERARCHICAL_CHUNKING", "false").lower() == "true"
+    parent_chunk_size: int = int(os.getenv("PARENT_CHUNK_SIZE", "2000"))
+    child_chunk_size: int = int(os.getenv("CHILD_CHUNK_SIZE", "400"))
+
+    use_metadata_extraction: bool = os.getenv("USE_METADATA_EXTRACTION", "false").lower() == "true"
+    extract_summaries: bool = os.getenv("EXTRACT_SUMMARIES", "true").lower() == "true"
+    extract_keywords: bool = os.getenv("EXTRACT_KEYWORDS", "true").lower() == "true"
+    extract_questions: bool = os.getenv("EXTRACT_QUESTIONS", "false").lower() == "true"
+
+    use_hybrid_search: bool = os.getenv("USE_HYBRID_SEARCH", "false").lower() == "true"
+    hybrid_fusion_method: str = os.getenv("HYBRID_FUSION_METHOD", "rrf")  # rrf or weighted
+    hybrid_dense_weight: float = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.7"))
+    hybrid_sparse_weight: float = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.3"))
+
+    use_multi_vector: bool = os.getenv("USE_MULTI_VECTOR", "false").lower() == "true"
+
+    use_contextual_compression: bool = os.getenv("USE_CONTEXTUAL_COMPRESSION", "false").lower() == "true"
+    compression_method: str = os.getenv("COMPRESSION_METHOD", "embeddings")  # embeddings or llm
+    compression_similarity_threshold: float = float(os.getenv("COMPRESSION_SIMILARITY_THRESHOLD", "0.76"))
+
+    use_advanced_reranking: bool = os.getenv("USE_ADVANCED_RERANKING", "false").lower() == "true"
+    reranking_method: str = os.getenv("RERANKING_METHOD", "mmr")  # cross_encoder, llm, or mmr
+    mmr_lambda: float = float(os.getenv("MMR_LAMBDA", "0.7"))  # Relevance vs diversity balance
+
+    # Classifier model for fast operations (grading, compression, etc.)
+    classifier_model: str = os.getenv("CLASSIFIER_MODEL", "mistralai/magistral-small-2506")
+
     # API Settings
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))

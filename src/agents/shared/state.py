@@ -11,6 +11,17 @@ class RAGState(TypedDict, total=False):
     disambiguation_options: List[Dict]
     reformulated_query: Optional[str]
 
+    # Agentic RAG fields
+    use_agentic: bool  # Whether to use agentic workflow
+    datasource: Optional[str]  # "vectorstore" or "generate_direct"
+    retrieval_strategy: Optional[str]  # "simple", "multi_document", "multi_hop"
+    documents_relevant: bool
+    relevance_score: float
+    answer_grounded: bool
+    answer_useful: bool
+    retry_count: int
+    agentic_metadata: Optional[Dict]  # Routing, grading results, etc.
+
 
 class APIState(TypedDict, total=False):
     """API agent state"""

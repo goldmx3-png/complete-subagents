@@ -14,6 +14,17 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Lazy import to avoid circular dependency
+_agentic_workflow = None
+
+def get_agentic_workflow():
+    """Lazy load agentic workflow"""
+    global _agentic_workflow
+    if _agentic_workflow is None:
+        from src.agents.rag.agentic_workflow import AgenticRAGWorkflow
+        _agentic_workflow = AgenticRAGWorkflow()
+    return _agentic_workflow
+
 
 class RAGAgent(BaseAgent):
     """
@@ -141,8 +152,95 @@ class RAGAgent(BaseAgent):
             state["final_response"] = error_msg
             yield error_msg, state
 
+    async def execute_agentic(self, state: AgentState) -> AgentState:
+        """
+        Execute agentic RAG pipeline with self-correction
+
+        This method uses the advanced agentic workflow with:
+        - Adaptive routing
+        - Document relevance grading
+        - Query rewriting on poor retrieval
+        - Hallucination checking
+        - Answer quality validation
+        """
+        self._log_start("Agentic RAG pipeline")
+
+        # Initialize RAG state with agentic fields
+        if "rag" not in state:
+            state["rag"] = RAGState(
+                chunks=[],
+                context="",
+                is_ambiguous=False,
+                disambiguation_options=[],
+                reformulated_query=None,
+                use_agentic=True,
+                documents_relevant=False,
+                relevance_score=0.0,
+                answer_grounded=False,
+                answer_useful=False,
+                retry_count=0
+            )
+        else:
+            state["rag"]["use_agentic"] = True
+
+        try:
+            query = state["query"]
+            user_id = state["user_id"]
+            conversation_history = state.get("conversation_history", [])
+
+            logger.info(f"Agentic RAG: user={user_id}, query={query[:100]}")
+
+            # Get agentic workflow
+            workflow = get_agentic_workflow()
+
+            # Run agentic workflow
+            result = await workflow.run(
+                question=query,
+                user_id=user_id,
+                conversation_history=conversation_history,
+                max_retries=2
+            )
+
+            # Update state with results
+            state["final_response"] = result["answer"]
+            state["rag"]["chunks"] = result["documents"]
+            state["rag"]["agentic_metadata"] = result["metadata"]
+
+            # Store metadata for visibility
+            if result["metadata"]:
+                state["rag"]["datasource"] = result["metadata"].get("datasource")
+                state["rag"]["retrieval_strategy"] = result["metadata"].get("retrieval_strategy")
+                state["rag"]["documents_relevant"] = result["metadata"].get("documents_relevant", False)
+                state["rag"]["relevance_score"] = result["metadata"].get("relevance_score", 0.0)
+                state["rag"]["answer_grounded"] = result["metadata"].get("answer_grounded", False)
+                state["rag"]["answer_useful"] = result["metadata"].get("answer_useful", False)
+                state["rag"]["retry_count"] = result["metadata"].get("retry_count", 0)
+
+            logger.info(
+                f"Agentic RAG complete: "
+                f"datasource={state['rag'].get('datasource')}, "
+                f"retries={state['rag'].get('retry_count')}, "
+                f"docs={len(state['rag']['chunks'])}"
+            )
+
+            self._log_complete("Agentic RAG pipeline", chunks_retrieved=len(result["documents"]))
+
+        except Exception as e:
+            self._log_error("Agentic RAG pipeline", e)
+            logger.error(f"Agentic RAG error: {str(e)}", exc_info=True)
+            state["error"] = str(e)
+            state["final_response"] = "I encountered an error while processing your question. Please try again."
+
+        return state
+
     async def execute(self, state: AgentState) -> AgentState:
-        """Execute advanced RAG pipeline"""
+        """Execute advanced RAG pipeline (can route to agentic if enabled)"""
+        # Check if agentic mode is requested
+        use_agentic = state.get("rag", {}).get("use_agentic", False)
+        if use_agentic or settings.use_agentic_rag:
+            return await self.execute_agentic(state)
+
+        # Standard RAG pipeline
         self._log_start("RAG pipeline")
 
         # Initialize RAG state
