@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from src.config import settings
 from src.utils.logger import get_logger
 from src.utils.metrics import log_llm_metrics
+from src.utils.rate_limiter import get_rate_limiter
 
 logger = get_logger(__name__)
 
@@ -15,21 +16,25 @@ T = TypeVar('T', bound=BaseModel)
 
 
 class OpenRouterClient:
-    """Client for OpenRouter API"""
+    """Client for OpenRouter API with rate limiting"""
 
-    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None, use_rate_limiter: bool = True):
         self.api_key = api_key or settings.openrouter_api_key
         self.base_url = base_url or settings.openrouter_base_url
         self.model = model or settings.main_model
         timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
         self.client = httpx.AsyncClient(timeout=timeout)
 
+        # Rate limiter
+        self.use_rate_limiter = use_rate_limiter and getattr(settings, 'use_rate_limiter', True)
+        self.rate_limiter = get_rate_limiter() if self.use_rate_limiter else None
+
         if not self.api_key:
             raise ValueError("OpenRouter API key is required")
 
     async def chat(self, messages: List[Dict[str, str]], max_tokens: Optional[int] = None,
                    temperature: Optional[float] = None, stream: bool = False):
-        """Chat completion"""
+        """Chat completion with rate limiting"""
         prompt_length = sum(len(m.get("content", "")) for m in messages)
         logger.info(f"LLM chat: model={self.model}, messages={len(messages)}, prompt_len={prompt_length}, stream={stream}")
 
@@ -50,6 +55,18 @@ class OpenRouterClient:
         if stream:
             return self._stream_chat(headers, payload)
 
+        # Use rate limiter if enabled
+        if self.rate_limiter:
+            return await self.rate_limiter.execute_with_retry(
+                self._execute_chat,
+                headers,
+                payload
+            )
+        else:
+            return await self._execute_chat(headers, payload)
+
+    async def _execute_chat(self, headers: dict, payload: dict) -> str:
+        """Execute chat API call (internal method)"""
         start_time = time.time()
         try:
             response = await self.client.post(

@@ -200,6 +200,28 @@ class HybridRetriever:
         # Dense retriever should be indexed separately (in vector DB)
         logger.info(f"Indexed {len(documents)} documents in hybrid retriever")
 
+    def fuse_results(
+        self,
+        dense_results: List[Dict],
+        sparse_results: List[Dict],
+        top_k: int
+    ) -> List[Dict]:
+        """
+        Fuse dense and sparse results
+
+        Args:
+            dense_results: Results from dense (vector) search
+            sparse_results: Results from sparse (BM25) search
+            top_k: Number of final results to return
+
+        Returns:
+            Fused and ranked results
+        """
+        if self.fusion_method == "rrf":
+            return self._reciprocal_rank_fusion(dense_results, sparse_results, top_k)
+        else:  # weighted
+            return self._weighted_fusion(dense_results, sparse_results, top_k)
+
     async def retrieve(
         self,
         query: str,
