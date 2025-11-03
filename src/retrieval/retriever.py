@@ -168,15 +168,32 @@ class RAGRetriever:
 
     def _expand_query(self, query: str) -> str:
         """
-        Expand query with banking-specific related terms
+        Expand query with banking-specific related terms and multi-aspect expansion
 
         Args:
             query: Original query
 
         Returns:
-            Expanded query with synonyms
+            Expanded query with synonyms and aspect-based terms
         """
         query_lower = query.lower()
+
+        # Multi-aspect expansion for "what is", "explain", "describe" queries
+        # These queries benefit from retrieving multiple facets/aspects of a topic
+        aspect_triggers = ["what is", "what are", "explain", "describe", "tell me about", "how does"]
+        is_conceptual_query = any(trigger in query_lower for trigger in aspect_triggers)
+
+        if is_conceptual_query:
+            # Extract the main concept (e.g., "auth matrix" from "what is auth matrix")
+            # Add aspect-related terms to retrieve comprehensive information
+            aspect_terms = [
+                "workflow", "process", "scenario", "use case", "example",
+                "type", "types", "variation", "option", "options",
+                "configuration", "setup", "how it works", "functionality",
+                "bulk", "single", "sequential", "non-sequential",
+                "criteria", "rules", "conditions"
+            ]
+            query = f"{query} {' '.join(aspect_terms)}"
 
         # Banking terminology expansions
         expansions = {

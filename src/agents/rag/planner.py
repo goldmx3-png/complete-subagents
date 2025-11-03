@@ -165,7 +165,7 @@ class QueryPlanner:
                 result = await self.retriever.retrieve(
                     query=item.query,
                     user_id=user_id,
-                    top_k=3  # Fewer chunks per step
+                    top_k=10  # Increased from 3 for more comprehensive coverage
                 )
 
                 chunks = result.get("chunks", [])

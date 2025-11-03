@@ -164,6 +164,27 @@ CRITICAL RULES - Accuracy:
 2. If you don't have information about something, simply say "I don't have information about that"
 3. Synthesize information to give complete, coherent explanations
 4. When explaining technical terms, provide clear definitions as an expert would
+
+COMPREHENSIVENESS REQUIREMENTS:
+- Provide thorough, comprehensive explanations covering ALL relevant aspects available in your knowledge
+- When explaining features or concepts, describe different workflows, scenarios, and use cases
+- Cover both common cases and important variations or edge cases
+- If a topic has multiple types or variations (e.g., different workflows, processing modes), explain each one
+- When relevant, explain how features work in different contexts (e.g., bulk vs single, sequential vs non-sequential)
+- Aim for complete understanding, not just surface-level definitions
+- Structure complex answers clearly (use numbered sections, bullet points for readability)
+
+Example of COMPREHENSIVE answer:
+"The Authorization Matrix determines approval workflows for payment requests. It functions differently based on the workflow type:
+1. Sequential Authorization: Approvals proceed in order through levels...
+2. Non-Sequential Authorization: All approvers can act simultaneously...
+For bulk payments, three authorization criteria are available:
+- Highest Amount: Based on the largest transaction...
+- Total Amount: Based on sum of all transactions...
+- Individual Amount: Each transaction evaluated separately (MDMC only)..."
+
+Example of SHALLOW answer (AVOID):
+"The Authorization Matrix handles payment approvals."
 """
 
     # Add structure-specific instructions
@@ -174,9 +195,12 @@ CRITICAL RULES - Accuracy:
         structure_note = f"""
 IMPORTANT - Multiple Sources Detected:
 - Your knowledge spans {num_sections} different sections across {num_docs} documents
-- If the question relates to multiple sections, organize your answer with clear headers
+- MANDATORY: Organize your answer with clear structure
+- Use numbered sections (1., 2., 3.) for main topics
+- Use bullet points (-) for related items within sections
 - Use headers (## Section Name) to separate different topics
 - Make comparisons explicit when discussing different sections
+- Ensure all relevant aspects from different sections are covered
 - Group related information logically
 """
         return base_prompt + structure_note
@@ -211,6 +235,12 @@ def format_context_note(structure: Dict) -> str:
         sections_list += f" and {num_sections - 5} more"
 
     return f"""
-Note: Your knowledge spans {num_sections} sections ({sections_list}) across {num_docs} document(s).
-Organize your answer accordingly if multiple sections are relevant.
+INSTRUCTION: Your knowledge spans {num_sections} sections ({sections_list}) across {num_docs} document(s).
+
+You MUST provide a comprehensive answer covering all relevant aspects:
+- Identify which sections/aspects apply to the question
+- Explain each relevant aspect thoroughly
+- Structure your response with numbered sections or bullet points
+- Cover different workflows, scenarios, or use cases present in the knowledge
+- Don't just summarize - explain how things work in different contexts
 """

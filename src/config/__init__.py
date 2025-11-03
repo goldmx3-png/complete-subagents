@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # Application Settings
     max_context_length: int = int(os.getenv("MAX_CONTEXT_LENGTH", "32768"))
-    max_chunks_per_query: int = int(os.getenv("MAX_CHUNKS_PER_QUERY", "10"))
+    max_chunks_per_query: int = int(os.getenv("MAX_CHUNKS_PER_QUERY", "30"))
     conversation_history_limit: int = int(os.getenv("CONVERSATION_HISTORY_LIMIT", "10"))
     max_file_size_mb: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "1024"))
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # RAG Settings
     min_similarity_score: float = float(os.getenv("MIN_SIMILARITY_SCORE", "0.3"))
     ambiguity_threshold: float = float(os.getenv("AMBIGUITY_THRESHOLD", "0.15"))
-    top_k_retrieval: int = int(os.getenv("TOP_K_RETRIEVAL", "20"))
+    top_k_retrieval: int = int(os.getenv("TOP_K_RETRIEVAL", "50"))
     top_k_rerank: int = int(os.getenv("TOP_K_RERANK", "10"))
 
     # Query Enhancement Settings
@@ -95,10 +95,49 @@ class Settings(BaseSettings):
 
     use_advanced_reranking: bool = os.getenv("USE_ADVANCED_RERANKING", "false").lower() == "true"
     reranking_method: str = os.getenv("RERANKING_METHOD", "mmr")  # cross_encoder, llm, or mmr
-    mmr_lambda: float = float(os.getenv("MMR_LAMBDA", "0.7"))  # Relevance vs diversity balance
+    mmr_lambda: float = float(os.getenv("MMR_LAMBDA", "0.9"))  # Relevance vs diversity balance (increased for depth)
 
     # Classifier model for fast operations (grading, compression, etc.)
     classifier_model: str = os.getenv("CLASSIFIER_MODEL", "mistralai/magistral-small-2506")
+
+    # === Advanced Agentic RAG Settings ===
+
+    # Multi-Stage Retrieval Pipeline
+    use_multi_stage_pipeline: bool = os.getenv("USE_MULTI_STAGE_PIPELINE", "true").lower() == "true"
+    multistage_enable_query_enhancement: bool = os.getenv("MULTISTAGE_ENABLE_QUERY_ENHANCEMENT", "true").lower() == "true"
+    multistage_enable_hybrid_search: bool = os.getenv("MULTISTAGE_ENABLE_HYBRID_SEARCH", "true").lower() == "true"
+    multistage_enable_reranking: bool = os.getenv("MULTISTAGE_ENABLE_RERANKING", "true").lower() == "true"
+    multistage_enable_compression: bool = os.getenv("MULTISTAGE_ENABLE_COMPRESSION", "false").lower() == "true"
+
+    # Query Enhancement Settings
+    query_enhancement_strategy: str = os.getenv("QUERY_ENHANCEMENT_STRATEGY", "adaptive")  # adaptive, multi_perspective, decomposition, expansion, hyde
+    query_enhancement_num_variations: int = int(os.getenv("QUERY_ENHANCEMENT_NUM_VARIATIONS", "3"))
+
+    # Meta-Cognitive RAG Settings
+    use_meta_cognitive_rag: bool = os.getenv("USE_META_COGNITIVE_RAG", "false").lower() == "true"
+    metacog_max_iterations: int = int(os.getenv("METACOG_MAX_ITERATIONS", "3"))
+    metacog_improvement_threshold: float = float(os.getenv("METACOG_IMPROVEMENT_THRESHOLD", "0.1"))
+    metacog_min_confidence: float = float(os.getenv("METACOG_MIN_CONFIDENCE", "0.7"))
+
+    # Process Supervision Settings
+    use_process_supervision: bool = os.getenv("USE_PROCESS_SUPERVISION", "true").lower() == "true"
+    supervision_enable_fallbacks: bool = os.getenv("SUPERVISION_ENABLE_FALLBACKS", "true").lower() == "true"
+    supervision_track_metrics: bool = os.getenv("SUPERVISION_TRACK_METRICS", "true").lower() == "true"
+
+    # Iterative Refinement Settings
+    use_iterative_refinement: bool = os.getenv("USE_ITERATIVE_REFINEMENT", "true").lower() == "true"
+    refinement_max_iterations: int = int(os.getenv("REFINEMENT_MAX_ITERATIONS", "2"))
+    refinement_gap_threshold: float = float(os.getenv("REFINEMENT_GAP_THRESHOLD", "0.3"))
+
+    # Performance Optimization
+    enable_adaptive_routing: bool = os.getenv("ENABLE_ADAPTIVE_ROUTING", "true").lower() == "true"
+    fast_path_for_simple_queries: bool = os.getenv("FAST_PATH_FOR_SIMPLE_QUERIES", "true").lower() == "true"
+    simple_query_word_threshold: int = int(os.getenv("SIMPLE_QUERY_WORD_THRESHOLD", "5"))
+
+    # Metrics and Evaluation
+    track_rag_metrics: bool = os.getenv("TRACK_RAG_METRICS", "true").lower() == "true"
+    metrics_window_size: int = int(os.getenv("METRICS_WINDOW_SIZE", "100"))  # Number of queries to track
+    enable_quality_reports: bool = os.getenv("ENABLE_QUALITY_REPORTS", "true").lower() == "true"
 
     # API Settings
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
