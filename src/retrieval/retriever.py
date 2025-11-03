@@ -1,5 +1,5 @@
 """
-Advanced RAG Retriever with ambiguity detection and query enhancement
+Advanced RAG Retriever with ambiguity detection, query enhancement, hybrid search, and reranking
 """
 
 import time
@@ -8,6 +8,8 @@ from src.vectorstore.qdrant_store import QdrantStore
 from src.vectorstore.embeddings import EmbeddingsModel
 from src.retrieval.query_rewriter import QueryRewriter
 from src.retrieval.context_organizer import smart_organize_context, auto_detect_structure
+from src.retrieval.hybrid_retriever import HybridRetriever, BM25Retriever
+from src.retrieval.reranker import RerankerPipeline
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -31,6 +33,22 @@ class RAGRetriever:
         self.vectorstore = vectorstore or QdrantStore()
         self.embeddings = embeddings or EmbeddingsModel()
         self.query_rewriter = QueryRewriter()
+
+        # Advanced RAG components
+        self.bm25_retriever = BM25Retriever() if settings.use_hybrid_search else None
+        self.hybrid_retriever = HybridRetriever(
+            dense_retriever=None,  # Will use self.vectorstore directly
+            fusion_method=settings.hybrid_fusion_method,
+            dense_weight=settings.hybrid_dense_weight,
+            sparse_weight=settings.hybrid_sparse_weight
+        ) if settings.use_hybrid_search else None
+
+        self.reranker = RerankerPipeline(
+            method=settings.reranking_method,
+            lambda_param=settings.mmr_lambda
+        ) if settings.use_advanced_reranking else None
+
+        logger.info(f"RAGRetriever initialized: hybrid_search={settings.use_hybrid_search}, reranking={settings.use_advanced_reranking}")
 
     async def retrieve(
         self,
@@ -83,26 +101,73 @@ class RAGRetriever:
         # Step 3: Generate embedding
         query_embedding = self.embeddings.embed_query(expanded_query)
 
-        # Step 4: Search vector store with optional doc_id filter
-        logger.info(f"Searching vector store (top_k={top_k}, doc_id={doc_id})")
-        results = await self.vectorstore.search(
-            query_vector=query_embedding,
-            user_id=user_id,
-            top_k=top_k,
-            doc_id=doc_id
-        )
+        # Step 4: Search with hybrid or dense-only
+        if self.hybrid_retriever and self.bm25_retriever:
+            logger.info(f"Using hybrid search (dense + BM25, top_k={top_k})")
 
-        logger.info(f"Found {len(results)} results")
+            # Dense search
+            dense_results = await self.vectorstore.search(
+                query_vector=query_embedding,
+                user_id=user_id,
+                top_k=top_k * 2,  # Get more for fusion
+                doc_id=doc_id
+            )
 
-        # Step 5: Filter by minimum similarity score
+            # Ensure BM25 corpus is loaded
+            if not self.bm25_retriever.corpus:
+                logger.info("BM25 corpus empty, loading from vector store...")
+                await self._load_bm25_corpus(user_id, doc_id)
+
+            # BM25 sparse search
+            sparse_results = self.bm25_retriever.search(expanded_query, top_k=top_k * 2)
+
+            # Fuse results
+            results = self.hybrid_retriever.fuse_results(
+                dense_results=dense_results,
+                sparse_results=sparse_results,
+                top_k=top_k
+            )
+            logger.info(f"Hybrid fusion complete: {len(results)} results")
+        else:
+            # Standard dense-only search
+            logger.info(f"Using dense search (top_k={top_k}, doc_id={doc_id})")
+            results = await self.vectorstore.search(
+                query_vector=query_embedding,
+                user_id=user_id,
+                top_k=top_k,
+                doc_id=doc_id
+            )
+            logger.info(f"Found {len(results)} results")
+
+        # Step 5: Filter by minimum similarity score (skip for hybrid RRF scores)
         pre_filter_count = len(results)
-        results = [
-            r for r in results
-            if r.get("score", 0) >= settings.min_similarity_score
-        ]
+
+        # Only apply similarity filtering for dense search
+        # Hybrid RRF scores use different scale (lower values are normal)
+        if not self.hybrid_retriever or not self.bm25_retriever:
+            results = [
+                r for r in results
+                if r.get("score", 0) >= settings.min_similarity_score
+            ]
+        else:
+            # For hybrid search, just filter out zero or negative scores
+            results = [r for r in results if r.get("score", 0) > 0]
 
         if len(results) < pre_filter_count:
             logger.info(f"Filtered by min_similarity_score: {pre_filter_count} → {len(results)}")
+
+        # Step 6: Re-rank results (if enabled)
+        if self.reranker and results:
+            logger.info(f"Re-ranking {len(results)} results with {settings.reranking_method}")
+            try:
+                results = await self.reranker.rerank(
+                    query=expanded_query,
+                    documents=results,
+                    top_k=min(len(results), settings.top_k_rerank or top_k)
+                )
+                logger.info(f"Re-ranking complete: {len(results)} results")
+            except Exception as e:
+                logger.warning(f"Re-ranking failed: {str(e)}, using original order")
 
         # Step 7: Check for ambiguity
         is_ambiguous, disambiguation_options = self._check_ambiguity(results)
@@ -402,6 +467,51 @@ class RAGRetriever:
         question += "Please specify the section number, or ask your question more specifically."
 
         return question
+
+
+    def index_documents_for_bm25(self, chunks: List[Dict]):
+        """
+        Index documents in BM25 for hybrid search
+
+        Args:
+            chunks: List of chunk dictionaries to index
+        """
+        if self.bm25_retriever:
+            try:
+                self.bm25_retriever.index_documents(chunks)
+                logger.info(f"Indexed {len(chunks)} documents in BM25")
+            except Exception as e:
+                logger.warning(f"Failed to index documents in BM25: {str(e)}")
+
+    async def _load_bm25_corpus(self, user_id: str, doc_id: Optional[str] = None):
+        """
+        Load BM25 corpus from vector store
+
+        Args:
+            user_id: User ID
+            doc_id: Optional document ID filter
+        """
+        try:
+            # Get all chunks from vector store for this user/doc
+            # Use a large vector to get all documents
+            import numpy as np
+            dummy_vector = np.zeros(settings.embedding_dimension).tolist()
+
+            all_chunks = await self.vectorstore.search(
+                query_vector=dummy_vector,
+                user_id=user_id,
+                top_k=1000,  # Get up to 1000 chunks
+                doc_id=doc_id
+            )
+
+            if all_chunks:
+                self.bm25_retriever.index_documents(all_chunks)
+                logger.info(f"Loaded {len(all_chunks)} documents into BM25 corpus")
+            else:
+                logger.warning("No documents found to load into BM25 corpus")
+
+        except Exception as e:
+            logger.error(f"Failed to load BM25 corpus: {str(e)}")
 
 
 async def get_retriever() -> RAGRetriever:

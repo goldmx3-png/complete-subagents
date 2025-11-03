@@ -1,13 +1,16 @@
 """
-Document upload and processing pipeline
+Document upload and processing pipeline with Advanced RAG support
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pathlib import Path
 import uuid
 import shutil
 from src.document_processing.parser import DocumentParser
 from src.document_processing.chunker import DocumentChunker
+from src.document_processing.hierarchical_chunker import HierarchicalChunker
+from src.document_processing.metadata_extractor import MetadataExtractor
+from src.document_processing.rule_based_metadata import RuleBasedMetadataExtractor
 from src.vectorstore.embeddings import get_embeddings
 from src.vectorstore.qdrant_store import QdrantStore
 from src.config import settings
@@ -16,6 +19,12 @@ from src.utils.metrics import timed_operation
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Lazy import to avoid circular dependency
+def get_rag_retriever():
+    """Lazy import of RAG retriever"""
+    from src.retrieval.retriever import RAGRetriever
+    return RAGRetriever()
 
 
 class DocumentUploader:
@@ -41,10 +50,24 @@ class DocumentUploader:
         """
         self.parser = parser or DocumentParser()
         self.chunker = chunker or DocumentChunker()
+
+        # Advanced RAG components
+        self.hierarchical_chunker = HierarchicalChunker(
+            parent_chunk_size=settings.parent_chunk_size,
+            child_chunk_size=settings.child_chunk_size,
+            chunk_overlap=settings.chunk_overlap
+        ) if settings.use_hierarchical_chunking else None
+
+        # Use rule-based metadata extraction (fast, no LLM calls)
+        self.metadata_extractor = RuleBasedMetadataExtractor() if settings.use_metadata_extraction else None
+
         self.embeddings = embeddings or get_embeddings()
         self.vectorstore = vectorstore or QdrantStore()
         self.upload_dir = Path(upload_dir or settings.upload_directory)
         self.upload_dir.mkdir(exist_ok=True)
+
+        # Storage for parent chunks (in-memory for now, could be DB)
+        self.parent_chunks_store = {}
 
     async def upload_document(
         self,
@@ -108,10 +131,42 @@ class DocumentUploader:
             num_pages = parsed_doc.get("num_pages", 1)
             logger.info(f"Document parsed: {num_pages} pages")
 
-            # Step 3: Chunk document
+            # Step 3: Chunk document (with advanced RAG support)
             logger.info("Chunking document...")
-            chunks = self.chunker.chunk_document(parsed_doc, doc_id)
-            logger.info(f"Created {len(chunks)} chunks")
+
+            if self.hierarchical_chunker:
+                # Use hierarchical chunking
+                logger.info("Using hierarchical chunking (parent-child)")
+                # First get basic chunks
+                basic_chunks = self.chunker.chunk_document(parsed_doc, doc_id)
+
+                # Combine all text for hierarchical processing
+                full_text = "\n\n".join([chunk["text"] for chunk in basic_chunks])
+
+                # Create hierarchical structure
+                parent_chunks, child_chunks = self.hierarchical_chunker.chunk_document_hierarchical(
+                    text=full_text,
+                    doc_id=doc_id,
+                    metadata={"source": file_path.name, "user_id": user_id}
+                )
+
+                # Store parent chunks for later retrieval
+                for parent in parent_chunks:
+                    self.parent_chunks_store[parent["chunk_id"]] = parent
+
+                # Use child chunks for indexing
+                chunks = child_chunks
+                logger.info(f"Created {len(parent_chunks)} parent chunks, {len(child_chunks)} child chunks")
+            else:
+                # Use standard chunking
+                chunks = self.chunker.chunk_document(parsed_doc, doc_id)
+                logger.info(f"Created {len(chunks)} chunks")
+
+            # Step 3.5: Extract metadata (if enabled)
+            if self.metadata_extractor and chunks:
+                logger.info("Extracting metadata for chunks...")
+                chunks = await self._enrich_chunks_with_metadata(chunks)
+                logger.info("Metadata extraction complete")
 
             # Step 4: Generate embeddings
             logger.info(f"Generating embeddings for {len(chunks)} chunks...")
@@ -127,6 +182,16 @@ class DocumentUploader:
                 user_id=user_id,
                 doc_id=doc_id
             )
+
+            # Step 6: Index in BM25 for hybrid search (if enabled)
+            if settings.use_hybrid_search:
+                logger.info("Indexing documents in BM25 for hybrid search...")
+                try:
+                    retriever = get_rag_retriever()
+                    retriever.index_documents_for_bm25(chunks)
+                    logger.info("BM25 indexing complete")
+                except Exception as e:
+                    logger.warning(f"BM25 indexing failed: {str(e)}")
 
             # Add metrics
             metrics['num_chunks'] = len(chunks)
@@ -175,6 +240,28 @@ class DocumentUploader:
             "status": "deleted"
         }
 
+    async def _enrich_chunks_with_metadata(self, chunks: List[Dict]) -> List[Dict]:
+        """
+        Enrich chunks with metadata using rule-based extraction (fast, no LLM calls)
+
+        Args:
+            chunks: List of chunks to enrich
+
+        Returns:
+            Enriched chunks
+        """
+        logger.info(f"Rule-based metadata extraction: {len(chunks)} chunks")
+
+        # Use rule-based extraction (synchronous, instant)
+        enriched_chunks = self.metadata_extractor.extract_metadata_batch(
+            chunks=chunks,
+            extract_title=True,
+            extract_summary=settings.extract_summaries,
+            extract_keywords=settings.extract_keywords
+        )
+
+        return enriched_chunks
+
     async def get_document_info(self, doc_id: str, user_id: str) -> Dict:
         """
         Get document information
@@ -209,3 +296,15 @@ class DocumentUploader:
             "chunks_count": chunk_count,
             **file_info
         }
+
+    def get_parent_chunk(self, parent_chunk_id: str) -> Optional[Dict]:
+        """
+        Retrieve a parent chunk by ID
+
+        Args:
+            parent_chunk_id: Parent chunk ID
+
+        Returns:
+            Parent chunk or None if not found
+        """
+        return self.parent_chunks_store.get(parent_chunk_id)

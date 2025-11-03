@@ -91,31 +91,79 @@ class MetadataExtractor:
     async def extract_metadata_batch(
         self,
         chunks: List[Dict],
+        batch_size: int = 5,
+        delay_between_batches: float = 3.0,
         **extraction_options
     ) -> List[Dict]:
         """
-        Extract metadata for multiple chunks
+        Extract metadata for multiple chunks with rate limiting
+
+        Processes chunks in parallel batches with delays between batches
+        to avoid hitting API rate limits.
 
         Args:
             chunks: List of chunk dicts
+            batch_size: Number of chunks to process in parallel (default 5)
+            delay_between_batches: Seconds to wait between batches (default 3.0)
             **extraction_options: Options for extract_metadata
 
         Returns:
             List of enriched chunks
         """
+        import asyncio
+
         enriched_chunks = []
+        total_chunks = len(chunks)
 
-        for i, chunk in enumerate(chunks):
+        logger.info(
+            f"Starting batch metadata extraction: {total_chunks} chunks, "
+            f"batch_size={batch_size}, delay={delay_between_batches}s"
+        )
+
+        # Process in batches
+        for batch_start in range(0, total_chunks, batch_size):
+            batch_end = min(batch_start + batch_size, total_chunks)
+            batch = chunks[batch_start:batch_end]
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (total_chunks + batch_size - 1) // batch_size
+
+            logger.info(
+                f"Processing batch {batch_num}/{total_batches} "
+                f"({len(batch)} chunks)"
+            )
+
+            # Process batch in parallel
+            tasks = [
+                self.extract_metadata(chunk, **extraction_options)
+                for chunk in batch
+            ]
+
             try:
-                enriched = await self.extract_metadata(chunk, **extraction_options)
-                enriched_chunks.append(enriched)
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                if (i + 1) % 10 == 0:
-                    logger.info(f"Enriched {i + 1}/{len(chunks)} chunks")
+                # Handle results and errors
+                for i, result in enumerate(batch_results):
+                    if isinstance(result, Exception):
+                        logger.error(
+                            f"Error enriching chunk {batch_start + i}: {str(result)}"
+                        )
+                        enriched_chunks.append(batch[i])  # Use original on error
+                    else:
+                        enriched_chunks.append(result)
 
             except Exception as e:
-                logger.error(f"Error enriching chunk {i}: {str(e)}")
-                enriched_chunks.append(chunk)  # Use original on error
+                logger.error(f"Batch processing error: {str(e)}")
+                # Add all chunks from failed batch as-is
+                enriched_chunks.extend(batch)
+
+            # Delay between batches (except last batch)
+            if batch_end < total_chunks:
+                logger.debug(f"Waiting {delay_between_batches}s before next batch...")
+                await asyncio.sleep(delay_between_batches)
+
+        logger.info(
+            f"Batch metadata extraction complete: {len(enriched_chunks)}/{total_chunks} chunks processed"
+        )
 
         return enriched_chunks
 
