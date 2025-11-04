@@ -32,21 +32,30 @@ class QdrantStore:
             logger.error(f"Collection setup error: {e}")
 
     async def search(self, query_vector: List[float], user_id: str, top_k: int = 20, doc_id: Optional[str] = None) -> List[Dict]:
-        """Search vectors with optional doc_id filter"""
+        """Search vectors with optional doc_id filter (user_id kept for API compatibility but not used in filtering)"""
         try:
-            # Build filter conditions
-            filter_conditions = [FieldCondition(key="user_id", match=MatchValue(value=user_id))]
+            # Build filter conditions (knowledge base is shared across all users)
+            filter_conditions = []
 
             # Add doc_id filter if provided
             if doc_id:
                 filter_conditions.append(FieldCondition(key="doc_id", match=MatchValue(value=doc_id)))
 
-            results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                query_filter=Filter(must=filter_conditions),
-                limit=top_k
-            )
+            # Search with optional filter
+            if filter_conditions:
+                results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    query_filter=Filter(must=filter_conditions),
+                    limit=top_k
+                )
+            else:
+                # No filter needed, search all documents
+                results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    limit=top_k
+                )
             return [{
                 "id": r.id,
                 "score": r.score,

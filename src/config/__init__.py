@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     use_query_rewriting: bool = os.getenv("USE_QUERY_REWRITING", "true").lower() == "true"
     query_rewrite_cache_ttl: int = int(os.getenv("QUERY_REWRITE_CACHE_TTL", "86400"))  # 24 hours
 
+    # Agentic RAG Settings
+    agentic_rag_enabled: bool = os.getenv("AGENTIC_RAG_ENABLED", "true").lower() == "true"
+    agentic_rag_max_iterations: int = int(os.getenv("AGENTIC_RAG_MAX_ITERATIONS", "3"))
+    agentic_rag_min_relevant_docs: int = int(os.getenv("AGENTIC_RAG_MIN_RELEVANT_DOCS", "2"))
+    agentic_rag_retrieval_top_k: int = int(os.getenv("AGENTIC_RAG_RETRIEVAL_TOP_K", "10"))
+    agentic_rag_timeout: int = int(os.getenv("AGENTIC_RAG_TIMEOUT", "30000"))  # 30 seconds
+    grading_confidence_threshold: float = float(os.getenv("GRADING_CONFIDENCE_THRESHOLD", "0.7"))
+    enable_parallel_grading: bool = os.getenv("ENABLE_PARALLEL_GRADING", "true").lower() == "true"
+    enable_query_cache: bool = os.getenv("ENABLE_QUERY_CACHE", "true").lower() == "true"
+    enable_early_exit: bool = os.getenv("ENABLE_EARLY_EXIT", "true").lower() == "true"
+    agentic_rag_min_query_length: int = int(os.getenv("AGENTIC_RAG_MIN_QUERY_LENGTH", "8"))
+
     # API Settings
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
@@ -98,3 +110,8 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get the global settings instance"""
+    return settings

@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "mcp__exa__get_code_context_exa",
+      "mcp__perplexity__reason",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "mcp__Ref__ref_search_documentation"
     ],
     "deny": [],
     "ask": []

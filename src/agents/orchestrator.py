@@ -12,6 +12,7 @@ from src.agents.menu.agent import MenuAgent
 from src.agents.api.agent import APIAgent
 from src.agents.support.agent import SupportAgent
 from src.agents.classifier import UnifiedClassifier
+from src.agents.agentic_rag import get_agentic_rag_agent
 from src.utils.logger import get_logger
 from src.config import settings
 
@@ -34,6 +35,7 @@ class OrchestratorAgent:
 
         # Initialize domain agents
         self.rag_agent = RAGAgent()
+        self.agentic_rag_agent = get_agentic_rag_agent()
         self.menu_agent = MenuAgent()
         self.api_agent = APIAgent()
         self.support_agent = SupportAgent()
@@ -44,7 +46,7 @@ class OrchestratorAgent:
         # Build LangGraph workflow
         self.graph = self._build_graph()
 
-        logger.info("Orchestrator Agent initialized")
+        logger.info("Orchestrator Agent initialized (Agentic RAG: %s)", settings.agentic_rag_enabled)
 
     def _build_graph(self) -> StateGraph:
         """Build LangGraph workflow"""
@@ -53,6 +55,7 @@ class OrchestratorAgent:
         # Add nodes
         workflow.add_node("detect_intent", self._detect_intent_node)
         workflow.add_node("rag", self.rag_agent.execute)
+        workflow.add_node("agentic_rag", self.agentic_rag_agent.execute)
         workflow.add_node("menu", self.menu_agent.execute)
         workflow.add_node("api", self.api_agent.execute)
         workflow.add_node("support", self.support_agent.execute)
@@ -66,6 +69,7 @@ class OrchestratorAgent:
             self._route_to_agent,
             {
                 "rag": "rag",
+                "agentic_rag": "agentic_rag",
                 "menu": "menu",
                 "api": "api",
                 "support": "support",
@@ -75,6 +79,7 @@ class OrchestratorAgent:
 
         # All agents end the workflow
         workflow.add_edge("rag", END)
+        workflow.add_edge("agentic_rag", END)
         workflow.add_edge("menu", END)
         workflow.add_edge("api", END)
         workflow.add_edge("support", END)
@@ -135,6 +140,18 @@ class OrchestratorAgent:
             state["route"] = route_map.get(intent, "RAG_ONLY")
             state["route_reasoning"] = f"unified-classifier (confidence={confidence:.2f}): {reasoning}"
 
+            # Check if we should use agentic RAG for complex queries
+            if intent == "rag" and settings.agentic_rag_enabled:
+                if self.agentic_rag_agent.should_use(state["query"]):
+                    state["route"] = "AGENTIC_RAG"
+                    analysis = self.agentic_rag_agent.analyze_query(state["query"])
+                    logger.info(
+                        f"Routing to AGENTIC RAG: complexity={analysis['complexity_level']}, "
+                        f"score={analysis['complexity_score']:.2f}, reasons={analysis['reasons']}"
+                    )
+                else:
+                    logger.info("Routing to standard RAG (simple query)")
+
             # Store product in metadata for API agent
             if intent == "api" and product:
                 if "metadata" not in state:
@@ -163,6 +180,8 @@ class OrchestratorAgent:
             return "support"
         elif route == "API_ONLY":
             return "api"
+        elif route == "AGENTIC_RAG":
+            return "agentic_rag"
         else:  # RAG_ONLY or default
             return "rag"
 
@@ -279,8 +298,17 @@ class OrchestratorAgent:
                 return
 
             # Step 3: Execute appropriate agent
-            if route in ["RAG_ONLY", "RAG_THEN_API"] and hasattr(self.rag_agent, 'execute_stream'):
-                # RAG agent with streaming
+            if route == "AGENTIC_RAG" and hasattr(self.agentic_rag_agent, 'execute_stream'):
+                # Agentic RAG agent with streaming
+                state["active_agent"] = "AgenticRAGAgent"
+                async for chunk, updated_state in self.agentic_rag_agent.execute_stream(state):
+                    yield chunk, updated_state
+
+                duration_ms = (time.time() - start_time) * 1000
+                logger.info(f"Streaming Agentic RAG complete in {duration_ms:.0f}ms")
+
+            elif route in ["RAG_ONLY", "RAG_THEN_API"] and hasattr(self.rag_agent, 'execute_stream'):
+                # Standard RAG agent with streaming
                 state["active_agent"] = "RAGAgent"
                 async for chunk, updated_state in self.rag_agent.execute_stream(state):
                     yield chunk, updated_state
@@ -307,7 +335,7 @@ class OrchestratorAgent:
                 yield state["final_response"], state
 
             else:
-                # Default to RAG
+                # Default to standard RAG
                 state["active_agent"] = "RAGAgent"
                 async for chunk, updated_state in self.rag_agent.execute_stream(state):
                     yield chunk, updated_state
