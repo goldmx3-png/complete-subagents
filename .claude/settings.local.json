@@ -6,7 +6,8 @@
       "mcp__perplexity__reason",
       "mcp__context7__resolve-library-id",
       "mcp__context7__get-library-docs",
-      "mcp__Ref__ref_search_documentation"
+      "mcp__Ref__ref_search_documentation",
+      "mcp__Ref__ref_read_url"
     ],
     "deny": [],
     "ask": []

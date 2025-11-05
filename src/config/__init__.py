@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     semantic_chunk_model: str = os.getenv("SEMANTIC_CHUNK_MODEL", "mistralai/mistral-small-latest")
     preserve_tables: bool = os.getenv("PRESERVE_TABLES", "true").lower() == "true"
 
+    # Markdown-Based Chunking (with docling PDF parser)
+    use_markdown_chunking: bool = os.getenv("USE_MARKDOWN_CHUNKING", "false").lower() == "true"
+    markdown_chunk_size_tokens: int = int(os.getenv("MARKDOWN_CHUNK_SIZE_TOKENS", "600"))
+    markdown_chunk_overlap_percentage: int = int(os.getenv("MARKDOWN_CHUNK_OVERLAP_PERCENTAGE", "15"))
+    markdown_table_size_threshold: int = int(os.getenv("MARKDOWN_TABLE_SIZE_THRESHOLD", "500"))
+    markdown_preserve_headers: bool = os.getenv("MARKDOWN_PRESERVE_HEADERS", "true").lower() == "true"
+    docling_extract_tables: bool = os.getenv("DOCLING_EXTRACT_TABLES", "true").lower() == "true"
+    docling_extract_images: bool = os.getenv("DOCLING_EXTRACT_IMAGES", "false").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

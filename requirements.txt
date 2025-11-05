@@ -25,9 +25,10 @@ sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 
 # Document Processing
-unstructured[all-docs]>=0.10.0
 pypdf2>=3.0.0
-pdfplumber>=0.9.0
+pdfplumber>=0.9.0  # Existing parser (backward compatibility)
+docling>=2.0.0  # Advanced PDF to Markdown conversion
+langchain-text-splitters>=0.3.0  # Markdown-aware text splitting
 
 # Utils
 python-dotenv>=1.0.0

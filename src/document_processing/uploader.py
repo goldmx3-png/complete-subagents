@@ -8,6 +8,7 @@ import uuid
 import shutil
 from src.document_processing.parser import DocumentParser
 from src.document_processing.chunker import DocumentChunker
+from src.document_processing.chunker_factory import ChunkerFactory
 from src.vectorstore.embeddings import get_embeddings
 from src.vectorstore.qdrant_store import QdrantStore
 from src.config import settings
@@ -24,27 +25,49 @@ class DocumentUploader:
     def __init__(
         self,
         parser: Optional[DocumentParser] = None,
-        chunker: Optional[DocumentChunker] = None,
+        chunker = None,  # Can be any chunker type
         embeddings = None,
         vectorstore: Optional[QdrantStore] = None,
-        upload_dir: Optional[str] = None
+        upload_dir: Optional[str] = None,
+        use_markdown_parser: Optional[bool] = None
     ):
         """
         Initialize document uploader
 
         Args:
-            parser: Document parser instance
-            chunker: Document chunker instance
+            parser: Document parser instance (uses config-based selection if None)
+            chunker: Document chunker instance (uses ChunkerFactory if None)
             embeddings: Embeddings instance
             vectorstore: Vector store instance
             upload_dir: Directory to save uploaded files (defaults to settings)
+            use_markdown_parser: Override config to force markdown parser (None = use config)
         """
-        self.parser = parser or DocumentParser()
-        self.chunker = chunker or DocumentChunker()
+        # Determine which parser to use
+        self.use_markdown = use_markdown_parser if use_markdown_parser is not None else settings.use_markdown_chunking
+
+        if self.use_markdown and parser is None:
+            # Use MarkdownDocumentParser when markdown chunking is enabled
+            try:
+                from src.document_processing.markdown_parser import MarkdownDocumentParser
+                self.parser = MarkdownDocumentParser()
+                logger.info("Using MarkdownDocumentParser with docling")
+            except ImportError as e:
+                logger.warning(f"Failed to import MarkdownDocumentParser: {e}. Falling back to DocumentParser")
+                self.parser = DocumentParser()
+                self.use_markdown = False
+        else:
+            self.parser = parser or DocumentParser()
+
+        # Use ChunkerFactory for intelligent chunker selection
+        self.chunker = chunker or ChunkerFactory.create_chunker()
+        self.chunker_name = ChunkerFactory.get_active_chunker_name()
+
         self.embeddings = embeddings or get_embeddings()
         self.vectorstore = vectorstore or QdrantStore()
         self.upload_dir = Path(upload_dir or settings.upload_directory)
         self.upload_dir.mkdir(exist_ok=True)
+
+        logger.info(f"DocumentUploader initialized: parser={'MarkdownDocumentParser' if self.use_markdown else 'DocumentParser'}, chunker={self.chunker_name}")
 
     async def upload_document(
         self,
@@ -97,7 +120,7 @@ class DocumentUploader:
             shutil.copy2(file_path, dest_path)
 
             # Step 2: Parse document
-            logger.info(f"Parsing document: type={file_ext}")
+            logger.info(f"Parsing document: type={file_ext}, parser={'markdown' if self.use_markdown else 'standard'}")
             if file_ext == ".pdf":
                 parsed_doc = self.parser.parse_pdf(str(dest_path), extract_tables=extract_tables)
             elif file_ext == ".txt":
@@ -105,12 +128,29 @@ class DocumentUploader:
             else:
                 raise ValueError(f"Unsupported file type: {file_ext}")
 
-            num_pages = parsed_doc.get("num_pages", 1)
-            logger.info(f"Document parsed: {num_pages} pages")
+            # Handle different parser outputs
+            if self.use_markdown:
+                num_pages = parsed_doc.get("metadata", {}).get("num_pages", 1)
+                logger.info(f"Document parsed: {num_pages} pages (markdown format)")
+            else:
+                num_pages = parsed_doc.get("num_pages", 1)
+                logger.info(f"Document parsed: {num_pages} pages")
 
             # Step 3: Chunk document
-            logger.info("Chunking document...")
-            chunks = self.chunker.chunk_document(parsed_doc, doc_id)
+            logger.info(f"Chunking document with {self.chunker_name}...")
+
+            # Handle different chunker interfaces
+            if self.chunker_name == "MarkdownChunker":
+                # MarkdownChunker expects (doc_data, doc_id, user_id)
+                chunks = self.chunker.chunk_document(parsed_doc, doc_id, user_id)
+            else:
+                # Legacy chunkers expect (parsed_doc, doc_id)
+                chunks = self.chunker.chunk_document(parsed_doc, doc_id)
+                # Add user_id to chunks if not present
+                for chunk in chunks:
+                    if "user_id" not in chunk:
+                        chunk["user_id"] = user_id
+
             logger.info(f"Created {len(chunks)} chunks")
 
             # Step 4: Generate embeddings
@@ -131,8 +171,10 @@ class DocumentUploader:
             # Add metrics
             metrics['num_chunks'] = len(chunks)
             metrics['num_pages'] = num_pages
-            metrics['num_text_chunks'] = len([c for c in chunks if c["chunk_type"] == "text"])
-            metrics['num_table_chunks'] = len([c for c in chunks if c["chunk_type"] == "table"])
+            metrics['num_text_chunks'] = len([c for c in chunks if c["chunk_type"] in ["text", "text_with_table"]])
+            metrics['num_table_chunks'] = len([c for c in chunks if "table" in c["chunk_type"]])
+            metrics['chunker_type'] = self.chunker_name
+            metrics['parser_type'] = 'markdown' if self.use_markdown else 'standard'
 
         logger.info(f"Document processing complete: doc_id={doc_id}, chunks={len(chunks)}")
 
