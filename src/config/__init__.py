@@ -102,6 +102,34 @@ class Settings(BaseSettings):
     banking_api_max_retries: int = int(os.getenv("BANKING_API_MAX_RETRIES", "3"))
     banking_api_verify_ssl: bool = os.getenv("BANKING_API_VERIFY_SSL", "true").lower() == "true"
 
+    # Enhanced Retrieval (2025)
+    # Hybrid Search (Vector + BM25)
+    enable_hybrid_search: bool = os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true"
+    hybrid_vector_weight: float = float(os.getenv("HYBRID_VECTOR_WEIGHT", "0.7"))
+    hybrid_bm25_weight: float = float(os.getenv("HYBRID_BM25_WEIGHT", "0.3"))
+    bm25_k1: float = float(os.getenv("BM25_K1", "1.5"))
+    bm25_b: float = float(os.getenv("BM25_B", "0.75"))
+
+    # Reranking Configuration
+    enable_reranking: bool = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
+    reranker_model_v2: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-large")
+    reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", "20"))
+    reranker_return_top_k: int = int(os.getenv("RERANKER_RETURN_TOP_K", "5"))
+    reranker_device_v2: str = os.getenv("RERANKER_DEVICE", "cpu")
+    reranker_batch_size: int = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
+
+    # Token-Based Chunking
+    chunk_size_tokens: int = int(os.getenv("CHUNK_SIZE_TOKENS", "600"))
+    chunk_overlap_percentage: int = int(os.getenv("CHUNK_OVERLAP_PERCENTAGE", "15"))
+    use_token_based_chunking: bool = os.getenv("USE_TOKEN_BASED_CHUNKING", "true").lower() == "true"
+
+    # Semantic Chunking
+    use_semantic_chunking: bool = os.getenv("USE_SEMANTIC_CHUNKING", "false").lower() == "true"
+    semantic_chunk_min_tokens: int = int(os.getenv("SEMANTIC_CHUNK_MIN_TOKENS", "200"))
+    semantic_chunk_max_tokens: int = int(os.getenv("SEMANTIC_CHUNK_MAX_TOKENS", "800"))
+    semantic_chunk_model: str = os.getenv("SEMANTIC_CHUNK_MODEL", "mistralai/mistral-small-latest")
+    preserve_tables: bool = os.getenv("PRESERVE_TABLES", "true").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

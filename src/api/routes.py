@@ -43,6 +43,40 @@ conversation_store = get_conversation_store()
 uploader = DocumentUploader()
 
 
+# Startup event - preload models
+@app.on_event("startup")
+async def startup_event():
+    """
+    Preload models at service startup to avoid first-request latency
+    """
+    logger.info("=" * 80)
+    logger.info("SERVICE STARTUP - Preloading models...")
+    logger.info("=" * 80)
+
+    # Preload embedding model
+    try:
+        from src.vectorstore.embeddings import EmbeddingsModel
+        logger.info("Preloading embedding model...")
+        embeddings = EmbeddingsModel()
+        logger.info(f"✓ Embedding model loaded: {settings.embedding_model}")
+    except Exception as e:
+        logger.error(f"✗ Failed to preload embedding model: {str(e)}")
+
+    # Preload reranker model if enabled
+    if settings.enable_reranking:
+        try:
+            from src.retrieval.reranker import preload_reranker
+            preload_reranker()
+        except Exception as e:
+            logger.error(f"✗ Failed to preload reranker: {str(e)}")
+    else:
+        logger.info("Reranking disabled - skipping reranker preload")
+
+    logger.info("=" * 80)
+    logger.info("✓ SERVICE READY - All models preloaded")
+    logger.info("=" * 80)
+
+
 @app.get("/", response_model=dict)
 async def root():
     """Root endpoint"""

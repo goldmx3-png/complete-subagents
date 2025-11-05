@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "query": "What are the payment cutoff times?",
+    "category": "simple_factual",
+    "expected_topics": ["cutoff", "payment", "time", "deadline"]
+  },
+  {
+    "id": 2,
+    "query": "How do I check my transaction history?",
+    "category": "procedural",
+    "expected_topics": ["transaction", "history", "view", "check"]
+  },
+  {
+    "id": 3,
+    "query": "What is the daily transfer limit for international payments?",
+    "category": "complex_factual",
+    "expected_topics": ["limit", "transfer", "international", "daily"]
+  },
+  {
+    "id": 4,
+    "query": "Steps to set up a new beneficiary",
+    "category": "procedural",
+    "expected_topics": ["beneficiary", "setup", "add", "steps"]
+  },
+  {
+    "id": 5,
+    "query": "Currency codes supported for foreign exchange",
+    "category": "table_lookup",
+    "expected_topics": ["currency", "forex", "exchange", "codes"]
+  },
+  {
+    "id": 6,
+    "query": "What happens if a payment fails validation?",
+    "category": "complex_procedural",
+    "expected_topics": ["validation", "failed", "payment", "error"]
+  },
+  {
+    "id": 7,
+    "query": "Account balance inquiry procedure",
+    "category": "procedural",
+    "expected_topics": ["balance", "account", "inquiry", "check"]
+  },
+  {
+    "id": 8,
+    "query": "Holiday calendar for payment processing",
+    "category": "table_lookup",
+    "expected_topics": ["holiday", "calendar", "payment", "processing"]
+  },
+  {
+    "id": 9,
+    "query": "How to track pending transactions in the queue?",
+    "category": "complex_procedural",
+    "expected_topics": ["queue", "pending", "transaction", "track", "status"]
+  },
+  {
+    "id": 10,
+    "query": "What are the different transaction statuses?",
+    "category": "simple_factual",
+    "expected_topics": ["status", "transaction", "states"]
+  }
+]

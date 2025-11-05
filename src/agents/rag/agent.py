@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 from src.agents.base import BaseAgent
 from src.agents.shared.state import AgentState, RAGState
 from src.llm.openrouter_client import OpenRouterClient
-from src.retrieval import RAGRetriever
+from src.retrieval.enhanced_retriever import EnhancedRAGRetriever
 from src.retrieval.context_organizer import auto_detect_structure, get_adaptive_system_prompt, format_context_note
 from src.config import settings
 from src.utils.logger import get_logger
@@ -25,11 +25,11 @@ class RAGAgent(BaseAgent):
 
     def __init__(
         self,
-        retriever: Optional[RAGRetriever] = None,
+        retriever: Optional[EnhancedRAGRetriever] = None,
         llm_client: Optional[OpenRouterClient] = None
     ):
         super().__init__()
-        self.retriever = retriever or RAGRetriever()
+        self.retriever = retriever or EnhancedRAGRetriever()
         self.llm = llm_client or OpenRouterClient(model=settings.main_model)
 
     async def can_handle(self, state: AgentState) -> bool:

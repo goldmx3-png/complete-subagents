@@ -1,0 +1,11 @@
+query_id,query,category,num_results,avg_score,top_score,retrieval_method,retrieval_time_ms,total_time_ms
+1,What are the payment cutoff times?,simple_factual,5,0.74478932,0.7828766,vector_only,34.77931022644043,421.85115814208984
+2,How do I check my transaction history?,procedural,5,0.653667058,0.6814792,vector_only,12.506961822509766,164.24202919006348
+3,What is the daily transfer limit for international payments?,complex_factual,5,0.642231428,0.65770626,vector_only,17.362594604492188,202.2850513458252
+4,Steps to set up a new beneficiary,procedural,5,0.647004744,0.704051,vector_only,5.818367004394531,188.39359283447266
+5,Currency codes supported for foreign exchange,table_lookup,5,0.72351154,0.75426507,vector_only,5.1441192626953125,181.67519569396973
+6,What happens if a payment fails validation?,complex_procedural,5,0.67152848,0.7035564,vector_only,7.124185562133789,321.81644439697266
+7,Account balance inquiry procedure,procedural,5,0.58517294,0.59395564,vector_only,6.290674209594727,284.8999500274658
+8,Holiday calendar for payment processing,table_lookup,5,0.7041430980000001,0.73842514,vector_only,5.639553070068359,206.60805702209473
+9,How to track pending transactions in the queue?,complex_procedural,5,0.721270218,0.77180195,vector_only,13.629674911499023,201.9338607788086
+10,What are the different transaction statuses?,simple_factual,5,0.65832925,0.68146855,vector_only,4.695653915405273,151.52478218078613
