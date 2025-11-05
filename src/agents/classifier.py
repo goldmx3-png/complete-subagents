@@ -19,6 +19,50 @@ class UnifiedClassifier:
     2. Product identification (if API intent)
     """
 
+    # Product configuration aligned with api_registry database
+    PRODUCTS = {
+        "single_payment": {
+            "keywords": [
+                # Transaction history queries
+                "transaction", "transactions", "recent transactions", "transaction history",
+                "transaction list", "payment history", "transaction summary",
+                # Payment/transfer queries
+                "payment", "payments", "transfer", "transfers", "pay", "remit", "fund transfer",
+                # Status queries - IMPORTANT: These relate to transaction/payment status
+                "pending", "pending verification", "pending release", "pending approval",
+                "verification records", "pending records", "pending verifier",
+                "completed", "completed transactions", "completed payments",
+                # Recurring
+                "recurring", "recurring transfer", "recurring payment", "standing order",
+                # Debit accounts
+                "debit account", "debit accounts", "entitled accounts"
+            ],
+            "description": "Payment transactions, transfers, transaction history, pending approvals/verification/release, completed payments, recurring transfers, and debit accounts"
+        },
+        "account_service": {
+            "keywords": [
+                "account", "accounts", "balance", "balances", "account balance",
+                "account details", "account info", "account information", "account summary",
+                "casa account", "current account", "my accounts"
+            ],
+            "description": "Account balance information, account details, and account summaries"
+        },
+        "bulk_payment": {
+            "keywords": [
+                "bulk", "bulk payment", "bulk transfer", "batch payment", "batch transfer",
+                "multiple payments", "mass payment", "file upload"
+            ],
+            "description": "Bulk or batch payment operations"
+        },
+        "loans": {
+            "keywords": [
+                "loan", "loans", "loan application", "loan status", "loan details",
+                "borrowing", "credit facility"
+            ],
+            "description": "Loan applications, status, and details"
+        }
+    }
+
     def __init__(self, llm_client: Optional[OpenRouterClient] = None):
         self.llm = llm_client or OpenRouterClient(
             model=settings.router_model
@@ -39,7 +83,7 @@ class UnifiedClassifier:
         Returns:
             {
                 "intent": "rag" | "api" | "menu",
-                "product": "payments" | "accounts" | "cards" | "loans" | null,
+                "product": "single_payment" | "account_service" | "cards" | "loans" | null,
                 "reasoning": str,
                 "confidence": float
             }
@@ -76,81 +120,42 @@ class UnifiedClassifier:
     ) -> List[Dict[str, str]]:
         """Build the classification prompt"""
 
-        system_prompt = """You are a banking chatbot classifier. Your task is to:
-1. Classify user intent into one of three categories: RAG, API, or MENU
-2. If intent is API, identify the banking product
+        # Build concise product list
+        product_list = []
+        for product_name, product_info in self.PRODUCTS.items():
+            keywords = ", ".join(product_info["keywords"][:3])
+            product_list.append(f"- **{product_name}**: {keywords}")
+        products_section = "\n".join(product_list)
 
-**Intent Classification:**
+        system_prompt = f"""Classify banking queries into: CAPABILITY, RAG, API, or MENU.
 
-🔹 **CAPABILITY** (Direct Answer - No Agent Needed):
-- Questions asking about the AI assistant's capabilities
-- Meta-questions about what the system can do
-- Examples:
-  - "What can you do?"
-  - "What are your capabilities?"
-  - "How can you help me?"
-  - "What can you help me with?"
+**INTENT TYPES:**
+- **CAPABILITY**: "What can you do?" → Provide direct_answer
+- **RAG**: Policies, rates, how-to, general info
+- **API**: Live data (balance, transactions, status, payments)
+- **MENU**: Greetings, navigation
 
-🔹 **RAG** (Retrieval-Augmented Generation):
-- Policy questions (interest rates, terms, conditions, eligibility, features)
-- General information about banking products
-- "How to" questions about processes
-- Educational/informational queries
-- Examples:
-  - "What is the interest rate for savings accounts?"
-  - "What are the eligibility criteria for home loans?"
-  - "Tell me about credit card rewards programs"
-  - "How do I apply for a personal loan?"
+**PRODUCTS (if API):**
+{products_section}
+- **bulk_payment**: bulk, batch, file upload, pending bulk verification.
+- **single_payment**: pending verification,  pending approval, pending release, transaction status.
 
-🔹 **API** (Real-time Banking Data):
-- Live account data (balance, status, details)
-- Transaction history or specific transaction queries
-- Payment status checks
-- Card activation status
-- Loan application status
-- Account opening status
-- Real-time operations
-- Examples:
-  - "What is my account balance?"
-  - "Show my recent transactions"
-  - "Is my payment processed?"
-  - "What is the status of my loan application?"
-  - "Check if my card is activated"
+**KEY RULES:**
+1. "pending verification/records" = single_payment (NOT account_service)
+2. "balance/account details" = account_service
+3. Uncertain product → use RAG (NOT api)
+4. Only API if product is clear
 
-🔹 **MENU** (Navigation/Help):
-- Simple greetings only
-- Explicit menu navigation requests
-- Examples:
-  - "Hello", "Hi", "Hey"
-  - "Show main menu", "Main menu", "Go back"
+**EXAMPLES:**
+- "pending verification records" → {{"intent":"api","product":"single_payment"}}
+- "recent transactions" → {{"intent":"api","product":"single_payment"}}
+- "account balance" → {{"intent":"api","product":"account_service"}}
+- "interest rates" → {{"intent":"rag","product":null}}
+- "help me" → {{"intent":"menu","product":null}}
 
-**Product Classification (if intent=API):**
-- **payments**: Payments, transfers, transactions
-- **accounts**: Account balance, account details, account status
-- **cards**: Credit cards, debit cards, card status
-- **loans**: Loan applications, loan status, loan details
-
-**Response Format:**
-Return ONLY valid JSON (no markdown, no explanation):
-{
-  "intent": "capability" | "rag" | "api" | "menu",
-  "product": "payments" | "accounts" | "cards" | "loans" | null,
-  "reasoning": "Brief explanation of classification",
-  "confidence": 0.0-1.0,
-  "direct_answer": "answer text here" (ONLY if intent is "capability")
-}
-
-**Important Rules:**
-- If asking about AI assistant capabilities → CAPABILITY + provide direct_answer
-- If asking about policies/information → RAG
-- If asking about live data/status → API + product
-- For CAPABILITY intent, provide a concise, friendly direct_answer explaining what the AI assistant can help with
-- Use conversation history for context if provided
-- Be confident in your classification
-- Product is null unless intent is API
-
-**Direct Answer Template for CAPABILITY:**
-"I'm an AI banking assistant. I can help you with: finding information from documents, answering questions about banking operations, policies, procedures, transactions, accounts, and providing general banking assistance. How can I assist you today?"
+Return JSON only:
+{{"intent":"<intent>","product":"<product>|null","reasoning":"<brief>","confidence":0.0-1.0}}
+For CAPABILITY, add: "direct_answer":"I'm an AI banking assistant. I help with documents, banking questions, transactions, accounts, and more."
 """
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -202,10 +207,11 @@ Return ONLY valid JSON (no markdown, no explanation):
                 result["product"] = None
             # Validate product if API intent
             elif result["intent"] == "api":
-                valid_products = ["payments", "accounts", "cards", "loans"]
+                valid_products = list(self.PRODUCTS.keys())
                 if result.get("product") not in valid_products:
-                    logger.warning(f"Invalid or missing product for API intent: {result.get('product')}")
-                    result["product"] = "accounts"  # Default fallback
+                    logger.warning(f"Invalid or missing product for API intent: {result.get('product')} - falling back to RAG")
+                    result["intent"] = "rag"  # Fallback to RAG instead of guessing
+                    result["product"] = None
             else:
                 result["product"] = None
 
@@ -232,25 +238,34 @@ Return ONLY valid JSON (no markdown, no explanation):
         response_lower = response.lower()
 
         # Check for explicit intent mentions
-        if "api" in response_lower and any(p in response_lower for p in ["payments", "accounts", "cards", "loans"]):
-            # Extract product
-            if "payments" in response_lower or "transfer" in response_lower:
-                product = "payments"
-            elif "accounts" in response_lower or "balance" in response_lower:
-                product = "accounts"
-            elif "cards" in response_lower or "credit" in response_lower or "debit" in response_lower:
-                product = "cards"
-            elif "loans" in response_lower:
-                product = "loans"
-            else:
-                product = "accounts"
+        if "api" in response_lower:
+            # Try to match product using PRODUCTS keywords
+            matched_product = None
+            for product_name, product_info in self.PRODUCTS.items():
+                # Check if any keywords match
+                for keyword in product_info["keywords"][:10]:  # Check first 10 keywords
+                    if keyword.lower() in response_lower:
+                        matched_product = product_name
+                        break
+                if matched_product:
+                    break
 
-            return {
-                "intent": "api",
-                "product": product,
-                "reasoning": "Extracted from fallback classification",
-                "confidence": 0.6
-            }
+            if matched_product:
+                return {
+                    "intent": "api",
+                    "product": matched_product,
+                    "reasoning": "Extracted from fallback classification",
+                    "confidence": 0.6
+                }
+            else:
+                # API mentioned but product unclear → fallback to RAG
+                logger.info("API intent detected but product unclear - falling back to RAG")
+                return {
+                    "intent": "rag",
+                    "product": None,
+                    "reasoning": "API intent unclear, falling back to RAG",
+                    "confidence": 0.5
+                }
 
         elif "menu" in response_lower or "help" in response_lower or "greet" in response_lower:
             return {
@@ -260,7 +275,7 @@ Return ONLY valid JSON (no markdown, no explanation):
                 "confidence": 0.6
             }
 
-        # Default to RAG
+        # Default to RAG for all other cases
         return {
             "intent": "rag",
             "product": None,
