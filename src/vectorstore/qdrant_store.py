@@ -65,6 +65,105 @@ class QdrantStore:
             logger.error(f"Search error: {e}")
             return []
 
+    async def search_with_metadata_filter(
+        self,
+        query_vector: List[float],
+        user_id: str,
+        top_k: int = 20,
+        doc_id: Optional[str] = None,
+        root_section: Optional[str] = None,
+        depth_min: Optional[int] = None,
+        depth_max: Optional[int] = None,
+        section_path: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        Search vectors with advanced metadata filtering on hierarchical structure.
+
+        Args:
+            query_vector: Query embedding vector
+            user_id: User ID (for API compatibility)
+            top_k: Number of results to return
+            doc_id: Optional document ID filter
+            root_section: Filter by root section name (e.g., "Introduction")
+            depth_min: Minimum hierarchy depth (e.g., 1 for top-level)
+            depth_max: Maximum hierarchy depth (e.g., 3 for subsections)
+            section_path: Filter by full hierarchical path (e.g., "Introduction > Background")
+
+        Returns:
+            List of search results with scores and payloads
+        """
+        try:
+            filter_conditions = []
+
+            # Add doc_id filter if provided
+            if doc_id:
+                filter_conditions.append(
+                    FieldCondition(key="doc_id", match=MatchValue(value=doc_id))
+                )
+
+            # Add root section filter
+            if root_section:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="metadata.hierarchy.root_section",
+                        match=MatchValue(value=root_section)
+                    )
+                )
+
+            # Add depth range filters
+            if depth_min is not None:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="metadata.hierarchy.depth",
+                        range={"gte": depth_min}
+                    )
+                )
+
+            if depth_max is not None:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="metadata.hierarchy.depth",
+                        range={"lte": depth_max}
+                    )
+                )
+
+            # Add full path filter (exact match)
+            if section_path:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="metadata.hierarchy.full_path",
+                        match=MatchValue(value=section_path)
+                    )
+                )
+
+            # Search with filters
+            if filter_conditions:
+                results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    query_filter=Filter(must=filter_conditions),
+                    limit=top_k
+                )
+            else:
+                # No metadata filters, use regular search
+                results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    limit=top_k
+                )
+
+            return [{
+                "id": r.id,
+                "score": r.score,
+                "payload": r.payload
+            } for r in results]
+
+        except Exception as e:
+            logger.error(f"Metadata-filtered search error: {e}")
+            # Fallback to regular search if metadata filtering fails
+            logger.warning("Falling back to regular search without metadata filters")
+            return await self.search(query_vector, user_id, top_k, doc_id)
+
     async def upsert(self, points: List[Dict], user_id: str):
         """Upsert points"""
         try:

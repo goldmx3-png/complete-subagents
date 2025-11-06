@@ -140,6 +140,17 @@ class Settings(BaseSettings):
     docling_extract_tables: bool = os.getenv("DOCLING_EXTRACT_TABLES", "true").lower() == "true"
     docling_extract_images: bool = os.getenv("DOCLING_EXTRACT_IMAGES", "false").lower() == "true"
 
+    # Hierarchical Metadata Configuration
+    enable_hierarchical_metadata: bool = os.getenv("ENABLE_HIERARCHICAL_METADATA", "true").lower() == "true"
+    hierarchy_max_depth: int = int(os.getenv("HIERARCHY_MAX_DEPTH", "6"))
+    hierarchy_include_siblings: bool = os.getenv("HIERARCHY_INCLUDE_SIBLINGS", "true").lower() == "true"
+    hierarchy_include_navigation: bool = os.getenv("HIERARCHY_INCLUDE_NAVIGATION", "true").lower() == "true"
+
+    # Retrieval Enhancement Configuration
+    enable_section_grouping: bool = os.getenv("ENABLE_SECTION_GROUPING", "true").lower() == "true"
+    enable_breadcrumb_context: bool = os.getenv("ENABLE_BREADCRUMB_CONTEXT", "true").lower() == "true"
+    metadata_filter_by_section: bool = os.getenv("METADATA_FILTER_BY_SECTION", "false").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

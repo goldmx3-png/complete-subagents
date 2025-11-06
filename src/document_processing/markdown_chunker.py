@@ -92,15 +92,25 @@ class MarkdownChunker:
         """
         chunks = []
 
+        # Get hierarchical structure if available
+        hierarchy_structure = doc_data.get("hierarchy_structure", {})
+        text_elements = doc_data.get("text_elements", [])
+
         # Process text elements with markdown-aware splitting
         markdown_content = doc_data.get("markdown_content", "")
-        text_chunks = self._chunk_markdown_content(markdown_content, doc_id, user_id)
+        text_chunks = self._chunk_markdown_content(
+            markdown_content, doc_id, user_id, hierarchy_structure, text_elements
+        )
         chunks.extend(text_chunks)
 
         # Process table elements
         table_elements = doc_data.get("table_elements", [])
         table_chunks = self._process_table_elements(table_elements, doc_id, user_id)
         chunks.extend(table_chunks)
+
+        # Enrich chunks with section-level hierarchy information
+        if hierarchy_structure and text_elements:
+            chunks = self._enrich_chunk_hierarchy(chunks, hierarchy_structure, text_elements)
 
         # Add chunk IDs and sequence numbers
         for idx, chunk in enumerate(chunks):
@@ -109,7 +119,14 @@ class MarkdownChunker:
 
         return chunks
 
-    def _chunk_markdown_content(self, markdown: str, doc_id: str, user_id: str) -> List[Dict]:
+    def _chunk_markdown_content(
+        self,
+        markdown: str,
+        doc_id: str,
+        user_id: str,
+        hierarchy_structure: Dict = None,
+        text_elements: List[Dict] = None
+    ) -> List[Dict]:
         """
         Apply two-stage splitting to markdown content.
 
@@ -120,10 +137,16 @@ class MarkdownChunker:
             markdown: Markdown text to chunk
             doc_id: Document identifier
             user_id: User identifier
+            hierarchy_structure: Optional hierarchical structure from parser
+            text_elements: Optional text elements from parser
 
         Returns:
             List of chunk dictionaries with metadata
         """
+        if hierarchy_structure is None:
+            hierarchy_structure = {}
+        if text_elements is None:
+            text_elements = []
         chunks = []
 
         try:
@@ -230,6 +253,94 @@ class MarkdownChunker:
                 }
 
                 chunks.append(chunk_dict)
+
+        return chunks
+
+    def _enrich_chunk_hierarchy(
+        self,
+        chunks: List[Dict],
+        hierarchy_structure: Dict,
+        text_elements: List[Dict]
+    ) -> List[Dict]:
+        """
+        Enrich chunks with detailed hierarchical metadata.
+
+        Maps each chunk back to its source section and adds full hierarchical context
+        including breadcrumbs, depth, parent/child relationships, and navigation hints.
+
+        Args:
+            chunks: List of chunk dictionaries to enrich
+            hierarchy_structure: Hierarchical structure from parser
+            text_elements: Text elements from parser with section info
+
+        Returns:
+            Enriched chunks with hierarchical metadata
+        """
+        for chunk in chunks:
+            # Skip non-text chunks (tables)
+            if chunk["chunk_type"] not in ["text", "text_with_table"]:
+                continue
+
+            # Get existing section_hierarchy from chunk metadata
+            section_hierarchy = chunk["metadata"].get("section_hierarchy", {})
+
+            # Try to find matching section in hierarchy_structure
+            # Match by comparing the header context
+            best_match_idx = None
+            best_match_score = 0
+
+            for idx, hierarchy_meta in hierarchy_structure.items():
+                # Compare headers at each level
+                match_score = 0
+                for level in ["h1", "h2", "h3", "h4"]:
+                    if level in section_hierarchy:
+                        level_num = int(level[1])  # Extract number from "h1", "h2", etc.
+                        if (len(hierarchy_meta["breadcrumbs"]) >= level_num and
+                            hierarchy_meta["breadcrumbs"][level_num - 1] == section_hierarchy[level]):
+                            match_score += 1
+
+                if match_score > best_match_score:
+                    best_match_score = match_score
+                    best_match_idx = idx
+
+            # If we found a good match, enrich with hierarchy metadata
+            if best_match_idx is not None and best_match_score > 0:
+                hierarchy_meta = hierarchy_structure[best_match_idx]
+
+                # Add enhanced hierarchy metadata
+                chunk["metadata"]["hierarchy"] = {
+                    "full_path": hierarchy_meta["full_path"],
+                    "breadcrumbs": hierarchy_meta["breadcrumbs"],
+                    "depth": hierarchy_meta["depth"],
+                    "level": hierarchy_meta["level"],
+                    "parent_section": hierarchy_meta.get("parent_section"),
+                    "root_section": hierarchy_meta.get("root_section"),
+                    "has_children": len(hierarchy_meta.get("children_indices", [])) > 0,
+                    "has_siblings": len(hierarchy_meta.get("sibling_indices", [])) > 0,
+                    "position_in_doc": hierarchy_meta.get("position_in_doc", "middle"),
+                    "section_index": hierarchy_meta["section_index"],
+                }
+
+                # Add navigation hints if available
+                if "previous_section" in hierarchy_meta:
+                    chunk["metadata"]["hierarchy"]["previous_section"] = hierarchy_meta["previous_section"]
+                if "next_section" in hierarchy_meta:
+                    chunk["metadata"]["hierarchy"]["next_section"] = hierarchy_meta["next_section"]
+
+                # Store sibling and children section names (not indices)
+                if hierarchy_meta.get("sibling_indices"):
+                    sibling_names = []
+                    for sib_idx in hierarchy_meta["sibling_indices"]:
+                        if sib_idx in hierarchy_structure:
+                            sibling_names.append(hierarchy_structure[sib_idx]["breadcrumbs"][-1])
+                    chunk["metadata"]["hierarchy"]["sibling_sections"] = sibling_names
+
+                if hierarchy_meta.get("children_indices"):
+                    children_names = []
+                    for child_idx in hierarchy_meta["children_indices"]:
+                        if child_idx in hierarchy_structure:
+                            children_names.append(hierarchy_structure[child_idx]["breadcrumbs"][-1])
+                    chunk["metadata"]["hierarchy"]["children_sections"] = children_names
 
         return chunks
 

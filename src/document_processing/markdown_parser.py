@@ -96,6 +96,9 @@ class MarkdownDocumentParser:
             # Extract text sections with headers
             text_elements = self._extract_text_sections(text_with_markers)
 
+            # Build hierarchical structure for enhanced metadata
+            hierarchy_structure = self._build_hierarchical_structure(text_elements)
+
             # Extract document metadata
             metadata = {
                 "file_name": file_path_obj.name,
@@ -113,6 +116,7 @@ class MarkdownDocumentParser:
                 "metadata": metadata,
                 "table_elements": table_elements,
                 "text_elements": text_elements,
+                "hierarchy_structure": hierarchy_structure,  # NEW: Full hierarchical tree
                 "file_hash": file_hash,
             }
 
@@ -183,6 +187,117 @@ class MarkdownDocumentParser:
             table_elements.append(table_element)
 
         return table_elements, text_with_markers
+
+    def _build_hierarchical_structure(self, text_elements: List[Dict]) -> Dict:
+        """
+        Build complete hierarchical tree from text sections for enhanced metadata.
+
+        This method creates a full document tree structure tracking parent-child
+        relationships, sibling sections, and positional context for each section.
+
+        Args:
+            text_elements: List of text section dictionaries from _extract_text_sections
+
+        Returns:
+            Dictionary mapping section index to hierarchical metadata:
+            {
+                section_idx: {
+                    "full_path": "Section 1 > Subsection 1.1 > Details",
+                    "breadcrumbs": ["Section 1", "Subsection 1.1", "Details"],
+                    "depth": 3,
+                    "parent_idx": 1,  # Index of parent section
+                    "root_idx": 0,    # Index of root section
+                    "children_indices": [3, 4],
+                    "sibling_indices": [2],
+                    "position_in_doc": "middle",  # "intro", "middle", "conclusion"
+                }
+            }
+        """
+        if not text_elements:
+            return {}
+
+        hierarchy_map = {}
+        hierarchy_stack = []  # Stack to track current path: [(idx, level, text), ...]
+
+        for idx, element in enumerate(text_elements):
+            level = element["header_level"]
+            header_text = element["header_text"]
+
+            # Pop stack until we find the parent level
+            while hierarchy_stack and hierarchy_stack[-1][1] >= level:
+                hierarchy_stack.pop()
+
+            # Build breadcrumb path
+            breadcrumbs = [item[2] for item in hierarchy_stack]
+            breadcrumbs.append(header_text)
+
+            # Determine parent and root
+            parent_idx = hierarchy_stack[-1][0] if hierarchy_stack else None
+            root_idx = hierarchy_stack[0][0] if hierarchy_stack else idx
+
+            # Determine position in document
+            if idx == 0:
+                position = "intro"
+            elif idx == len(text_elements) - 1:
+                position = "conclusion"
+            else:
+                position = "middle"
+
+            # Initialize hierarchy metadata
+            hierarchy_map[idx] = {
+                "full_path": " > ".join(breadcrumbs),
+                "breadcrumbs": breadcrumbs,
+                "depth": len(breadcrumbs),
+                "level": level,
+                "parent_idx": parent_idx,
+                "root_idx": root_idx,
+                "parent_section": breadcrumbs[-2] if len(breadcrumbs) > 1 else None,
+                "root_section": breadcrumbs[0] if breadcrumbs else None,
+                "children_indices": [],
+                "sibling_indices": [],
+                "position_in_doc": position,
+                "section_index": idx,
+            }
+
+            # Update parent's children list
+            if parent_idx is not None:
+                hierarchy_map[parent_idx]["children_indices"].append(idx)
+
+            # Add to stack for future children
+            hierarchy_stack.append((idx, level, header_text))
+
+        # Second pass: identify siblings (same parent, same level)
+        for idx in hierarchy_map:
+            parent_idx = hierarchy_map[idx]["parent_idx"]
+            current_level = hierarchy_map[idx]["level"]
+
+            # Find siblings: sections with same parent and level
+            for other_idx in hierarchy_map:
+                if other_idx != idx:
+                    if (hierarchy_map[other_idx]["parent_idx"] == parent_idx and
+                        hierarchy_map[other_idx]["level"] == current_level):
+                        hierarchy_map[idx]["sibling_indices"].append(other_idx)
+
+        # Third pass: add navigation hints
+        for idx in hierarchy_map:
+            siblings = hierarchy_map[idx]["sibling_indices"]
+            if siblings:
+                # Sort siblings by index
+                siblings_sorted = sorted(siblings)
+                current_pos = siblings_sorted.index(idx) if idx in siblings_sorted else -1
+
+                # Add previous/next section hints
+                if current_pos > 0:
+                    prev_idx = siblings_sorted[current_pos - 1]
+                    hierarchy_map[idx]["previous_section_idx"] = prev_idx
+                    hierarchy_map[idx]["previous_section"] = hierarchy_map[prev_idx]["full_path"]
+
+                if current_pos < len(siblings_sorted) - 1:
+                    next_idx = siblings_sorted[current_pos + 1]
+                    hierarchy_map[idx]["next_section_idx"] = next_idx
+                    hierarchy_map[idx]["next_section"] = hierarchy_map[next_idx]["full_path"]
+
+        return hierarchy_map
 
     def _extract_text_sections(self, markdown: str) -> List[Dict]:
         """

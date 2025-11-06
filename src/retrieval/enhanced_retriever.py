@@ -268,7 +268,7 @@ class EnhancedRAGRetriever:
         use_smart_organization: bool = True
     ) -> str:
         """
-        Format retrieved chunks into context for LLM
+        Format retrieved chunks into context for LLM with hierarchical metadata.
 
         Args:
             chunks: Retrieved chunks
@@ -276,28 +276,118 @@ class EnhancedRAGRetriever:
             use_smart_organization: Whether to use smart organization
 
         Returns:
-            Formatted context string
+            Formatted context string with hierarchical breadcrumbs
         """
         max_chunks = max_chunks or settings.max_chunks_per_query
         top_chunks = chunks[:max_chunks]
 
+        # Check if section grouping is enabled
+        if settings.enable_section_grouping:
+            return self._format_context_with_grouping(top_chunks)
+        else:
+            return self._format_context_simple(top_chunks)
+
+    def _format_context_simple(self, chunks: List[Dict]) -> str:
+        """
+        Simple formatting without section grouping (backward compatible).
+
+        Args:
+            chunks: List of chunks to format
+
+        Returns:
+            Formatted context string
+        """
         formatted_chunks = []
-        for i, chunk in enumerate(top_chunks, 1):
+        for i, chunk in enumerate(chunks, 1):
             payload = chunk.get("payload", {})
             text = payload.get("text", "")
-            section_title = payload.get("section_title", "General Information")
             doc_id = payload.get("doc_id", "Document")
             score = chunk.get("score", 0.0)
+            metadata = payload.get("metadata", {})
 
-            # Format with metadata
+            # Try to get hierarchical context if available
             chunk_text = f"[Chunk {i}] From: {doc_id}"
-            if section_title and section_title != "General Information":
-                chunk_text += f", Section: {section_title}"
-            chunk_text += f"\nRelevance: {score:.2f}\n{text}"
 
+            if settings.enable_breadcrumb_context:
+                hierarchy = metadata.get("hierarchy", {})
+                if hierarchy and "full_path" in hierarchy:
+                    chunk_text += f"\nModule: {hierarchy['full_path']}"
+                else:
+                    # Fallback to old header_context
+                    header_context = metadata.get("header_context", "")
+                    section_title = payload.get("section_title", "")
+                    if header_context:
+                        chunk_text += f"\nSection: {header_context}"
+                    elif section_title and section_title != "General Information":
+                        chunk_text += f"\nSection: {section_title}"
+
+            chunk_text += f"\nRelevance: {score:.2f}\n{text}"
             formatted_chunks.append(chunk_text)
 
         return "\n\n---\n\n".join(formatted_chunks)
+
+    def _format_context_with_grouping(self, chunks: List[Dict]) -> str:
+        """
+        Format context with section grouping for better organization.
+
+        Args:
+            chunks: List of chunks to format
+
+        Returns:
+            Formatted context string grouped by sections
+        """
+        from collections import defaultdict
+
+        # Group chunks by their hierarchical path
+        section_groups = defaultdict(list)
+
+        for chunk in chunks:
+            payload = chunk.get("payload", {})
+            metadata = payload.get("metadata", {})
+            hierarchy = metadata.get("hierarchy", {})
+
+            # Determine grouping key
+            if hierarchy and "root_section" in hierarchy:
+                group_key = hierarchy["root_section"]
+            elif "header_context" in metadata:
+                # Fallback: use first part of header_context
+                header_context = metadata["header_context"]
+                group_key = header_context.split(" > ")[0] if header_context else "General"
+            else:
+                group_key = "General"
+
+            section_groups[group_key].append(chunk)
+
+        # Format grouped sections
+        formatted_sections = []
+
+        for section_name, section_chunks in section_groups.items():
+            section_header = f"\n{'='*60}\n📂 {section_name}\n{'='*60}\n"
+            formatted_sections.append(section_header)
+
+            for i, chunk in enumerate(section_chunks, 1):
+                payload = chunk.get("payload", {})
+                text = payload.get("text", "")
+                doc_id = payload.get("doc_id", "Document")
+                score = chunk.get("score", 0.0)
+                metadata = payload.get("metadata", {})
+                hierarchy = metadata.get("hierarchy", {})
+
+                chunk_text = f"[{section_name} - Chunk {i}]"
+
+                # Add full hierarchical path if available
+                if settings.enable_breadcrumb_context and hierarchy:
+                    if "full_path" in hierarchy:
+                        chunk_text += f"\n📍 Location: {hierarchy['full_path']}"
+
+                    # Add depth indicator
+                    if "depth" in hierarchy:
+                        chunk_text += f" (Level {hierarchy['depth']})"
+
+                chunk_text += f"\n⚖️  Relevance: {score:.2f}\n\n{text}"
+                formatted_sections.append(chunk_text)
+
+        return "\n\n".join(formatted_sections)
 
 
 async def get_enhanced_retriever() -> EnhancedRAGRetriever:
