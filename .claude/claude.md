@@ -55,7 +55,7 @@ Orchestrator (Intent Detection & Routing)
 ### 🔒 ALWAYS Required Actions
 
 #### Configuration Management
-- **ALWAYS** update both `.env.example` and `.env` when adding new configuration parameters
+- **ALWAYS** update both `.env.example` and `.env` if you are adding new configuration parameters
 - **ALWAYS** document new environment variables with inline comments
 - **ALWAYS** provide sensible defaults in `.env.example`
 
@@ -102,13 +102,6 @@ Orchestrator (Intent Detection & Routing)
 - Utilities: `src/utils/`
 - Tests: `tests/test_<component>.py`
 - Configuration: `.env` (never commit), `.env.example` (commit)
-
-### 🧪 Testing Strategy
-
-- Unit tests for individual agent methods
-- Integration tests for agent communication
-- End-to-end tests for complete workflows
-- Test files in `tests/` directory with clear naming
 
 ### 🚀 Development Workflow
 

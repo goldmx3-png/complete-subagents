@@ -11,7 +11,9 @@
       "Bash(source:*)",
       "Bash(pip install:*)",
       "Bash(=0.3.0)",
-      "Bash(pip show:*)"
+      "Bash(pip show:*)",
+      "Bash(python tests/test_model_preload.py:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

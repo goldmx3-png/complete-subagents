@@ -112,11 +112,12 @@ class Settings(BaseSettings):
 
     # Reranking Configuration
     enable_reranking: bool = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
-    reranker_model_v2: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-large")
+    reranker_model_v2: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")  # Smaller, faster model
     reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", "20"))
     reranker_return_top_k: int = int(os.getenv("RERANKER_RETURN_TOP_K", "5"))
     reranker_device_v2: str = os.getenv("RERANKER_DEVICE", "cpu")
     reranker_batch_size: int = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
+    reranker_load_timeout: int = int(os.getenv("RERANKER_LOAD_TIMEOUT", "300"))  # 5 minutes default
 
     # Token-Based Chunking
     chunk_size_tokens: int = int(os.getenv("CHUNK_SIZE_TOKENS", "600"))
