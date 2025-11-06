@@ -73,7 +73,7 @@ class MarkdownChunker:
 
         # Stage 2: Token-based recursive splitter
         self.text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-            model_name="cl100k_base",
+            encoding_name="cl100k_base",
             chunk_size=self.chunk_size_tokens,
             chunk_overlap=self.chunk_overlap_tokens,
         )

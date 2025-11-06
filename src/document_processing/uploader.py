@@ -122,7 +122,7 @@ class DocumentUploader:
             # Step 2: Parse document
             logger.info(f"Parsing document: type={file_ext}, parser={'markdown' if self.use_markdown else 'standard'}")
             if file_ext == ".pdf":
-                parsed_doc = self.parser.parse_pdf(str(dest_path), extract_tables=extract_tables)
+                parsed_doc = self.parser.parse_pdf(str(dest_path))
             elif file_ext == ".txt":
                 parsed_doc = self.parser.parse_text_file(str(dest_path))
             else:
@@ -139,10 +139,21 @@ class DocumentUploader:
             # Step 3: Chunk document
             logger.info(f"Chunking document with {self.chunker_name}...")
 
-            # Handle different chunker interfaces
-            if self.chunker_name == "MarkdownChunker":
+            # Handle different chunker interfaces based on actual instance type
+            import inspect
+            from src.document_processing.markdown_chunker import MarkdownChunker
+            from src.document_processing.semantic_chunker import SemanticChunker
+
+            if isinstance(self.chunker, MarkdownChunker):
                 # MarkdownChunker expects (doc_data, doc_id, user_id)
                 chunks = self.chunker.chunk_document(parsed_doc, doc_id, user_id)
+            elif isinstance(self.chunker, SemanticChunker):
+                # SemanticChunker is async and expects (parsed_doc, doc_id)
+                chunks = await self.chunker.chunk_document(parsed_doc, doc_id)
+                # Add user_id to chunks if not present
+                for chunk in chunks:
+                    if "user_id" not in chunk:
+                        chunk["user_id"] = user_id
             else:
                 # Legacy chunkers expect (parsed_doc, doc_id)
                 chunks = self.chunker.chunk_document(parsed_doc, doc_id)
