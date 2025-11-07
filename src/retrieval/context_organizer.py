@@ -11,25 +11,60 @@ logger = get_logger(__name__)
 
 def auto_detect_structure(chunks: List[Dict]) -> Dict:
     """
-    Automatically detect document structure from chunks
+    Automatically detect document structure from chunks using hierarchical metadata
 
     Args:
         chunks: List of retrieved chunks with metadata
 
     Returns:
-        Structure info: sections, topics, hierarchy
+        Structure info with modules, subsections, hierarchy, and module distribution
     """
     structure = {
-        'sections': set(),
+        'modules': set(),           # h1 level (root_section)
+        'subsections': set(),        # h2 level (parent_section)
+        'sections': set(),           # Backward compatibility
         'topics': set(),
         'hierarchy': {},
-        'documents': set()
+        'documents': set(),
+        'module_distribution': {},   # Count of chunks per module
+        'depth_range': {'min': 999, 'max': 0},
+        'has_cross_module': False,
+        'breadcrumbs': []            # Sample breadcrumb paths
     }
 
     for chunk in chunks:
         payload = chunk.get('payload', {})
+        metadata = payload.get('metadata', {})
+        hierarchy = metadata.get('hierarchy', {})
 
-        # Collect structural elements
+        # Extract hierarchical structure
+        if hierarchy:
+            # Get module (h1/root_section)
+            root_section = hierarchy.get('root_section', '')
+            if root_section and root_section != 'unknown':
+                structure['modules'].add(root_section)
+                structure['module_distribution'][root_section] = \
+                    structure['module_distribution'].get(root_section, 0) + 1
+
+            # Get subsection (h2/parent_section)
+            parent_section = hierarchy.get('parent_section', '')
+            if parent_section and parent_section != root_section:
+                structure['subsections'].add(parent_section)
+
+            # Track depth range
+            depth = hierarchy.get('depth', 0)
+            if depth > 0:
+                structure['depth_range']['min'] = min(structure['depth_range']['min'], depth)
+                structure['depth_range']['max'] = max(structure['depth_range']['max'], depth)
+
+            # Collect sample breadcrumbs
+            full_path = hierarchy.get('full_path', '')
+            if full_path and full_path not in structure['breadcrumbs']:
+                structure['breadcrumbs'].append(full_path)
+                if len(structure['breadcrumbs']) > 5:  # Limit to 5 samples
+                    structure['breadcrumbs'].pop(0)
+
+        # Backward compatibility: fallback to old fields
         section = payload.get('section_title')
         if section and section != 'unknown':
             structure['sections'].add(section)
@@ -38,16 +73,21 @@ def auto_detect_structure(chunks: List[Dict]) -> Dict:
         if topic:
             structure['topics'].add(topic)
 
-        page = payload.get('page_numbers', [])
-        if page and section:
-            structure['hierarchy'][section] = page[0] if isinstance(page, list) else page
-
         doc_id = payload.get('doc_id')
         if doc_id:
             structure['documents'].add(doc_id)
 
-    logger.info(f"Structure detected: {len(structure['sections'])} sections, "
-                f"{len(structure['documents'])} documents")
+    # Detect cross-module queries
+    structure['has_cross_module'] = len(structure['modules']) > 1
+
+    # Handle case where no depth was found
+    if structure['depth_range']['min'] == 999:
+        structure['depth_range']['min'] = 0
+
+    logger.info(f"Structure detected: {len(structure['modules'])} modules, "
+                f"{len(structure['subsections'])} subsections, "
+                f"{len(structure['documents'])} documents, "
+                f"cross-module: {structure['has_cross_module']}")
 
     return structure
 
@@ -141,13 +181,13 @@ def smart_organize_context(chunks: List[Dict], max_chunks: int = 10) -> str:
 
 def get_adaptive_system_prompt(structure: Dict) -> str:
     """
-    Get adaptive system prompt based on detected structure
+    Get adaptive system prompt based on detected structure with breadcrumb interpretation
 
     Args:
         structure: Structure info from auto_detect_structure
 
     Returns:
-        Adapted system prompt
+        Adapted system prompt with module-awareness
     """
     base_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
 
@@ -164,53 +204,113 @@ CRITICAL RULES - Accuracy:
 2. If you don't have information about something, simply say "I don't have information about that"
 3. Synthesize information to give complete, coherent explanations
 4. When explaining technical terms, provide clear definitions as an expert would
+
+UNDERSTANDING LOCATION PATHS (Breadcrumbs):
+- Each chunk shows its location as: "Module > Section > Subsection"
+- The FIRST level = Main module (e.g., "Account Services", "Reports")
+- The SECOND level = Feature area (e.g., "External Account Summary")
+- The THIRD+ levels = Specific sub-features
+- Use these paths to distinguish between similar features in different modules
 """
 
     # Add structure-specific instructions
-    num_sections = len(structure.get('sections', set()))
+    num_modules = len(structure.get('modules', set()))
+    num_subsections = len(structure.get('subsections', set()))
     num_docs = len(structure.get('documents', set()))
+    has_cross_module = structure.get('has_cross_module', False)
+    module_dist = structure.get('module_distribution', {})
 
-    if num_sections > 1 or num_docs > 1:
+    # Cross-module query handling
+    if has_cross_module:
+        module_list = ", ".join([f'"{m}" ({count} chunks)'
+                                for m, count in sorted(module_dist.items(),
+                                                      key=lambda x: x[1], reverse=True)])
+
         structure_note = f"""
-IMPORTANT - Multiple Sources Detected:
-- Your knowledge spans {num_sections} different sections across {num_docs} documents
+🔍 CROSS-MODULE QUERY DETECTED:
+- Your knowledge spans {num_modules} different modules: {module_list}
+- CRITICAL: Distinguish between modules when answering:
+  * Identify which module each fact comes from using the Location path
+  * When a feature exists in multiple modules, list each module SEPARATELY
+  * Use clear headers like "## In [Module Name]" or "## [Module Name] Module"
+  * Example: If asked about "account transfers" that exists in both "Account Services" and "Recurring Transfers", provide separate explanations for each
+
+MODULE COMPARISON GUIDELINES:
+1. Check the Location path of each chunk to identify the module
+2. Group information by module when presenting your answer
+3. Explicitly state the module name when explaining features
+4. If comparing modules, use side-by-side comparison format
+5. If only one module is relevant to the question, focus on that module only
+"""
+        return base_prompt + structure_note
+
+    # Multi-section within same module
+    elif num_subsections > 1 or num_docs > 1:
+        structure_note = f"""
+IMPORTANT - Multiple Sections Detected:
+- Your knowledge spans {num_subsections} different subsections across {num_docs} documents
 - If the question relates to multiple sections, organize your answer with clear headers
 - Use headers (## Section Name) to separate different topics
 - Make comparisons explicit when discussing different sections
 - Group related information logically
+- Use the Location paths to understand which section each information comes from
 """
         return base_prompt + structure_note
 
+    # Single focused query
     return base_prompt + """
 Response Guidelines:
 - Natural, conversational tone - like a knowledgeable colleague
 - Direct and confident explanations
 - Keep responses focused and concise
-- Just answer as if you know it yourself
+- Use the Location path to understand the specific context of the information
 """
 
 
 def format_context_note(structure: Dict) -> str:
     """
-    Create a note about context structure for the LLM
+    Create a contextual note about structure for the LLM with module awareness
 
     Args:
-        structure: Structure info
+        structure: Structure info from auto_detect_structure
 
     Returns:
-        Context note string
+        Context note string with module distribution info
     """
-    num_sections = len(structure.get('sections', set()))
+    num_modules = len(structure.get('modules', set()))
+    num_subsections = len(structure.get('subsections', set()))
     num_docs = len(structure.get('documents', set()))
+    has_cross_module = structure.get('has_cross_module', False)
+    module_dist = structure.get('module_distribution', {})
 
-    if num_sections <= 1:
+    if num_modules <= 1 and num_subsections <= 1:
         return ""
 
-    sections_list = ", ".join(list(structure['sections'])[:5])
-    if num_sections > 5:
-        sections_list += f" and {num_sections - 5} more"
+    # Cross-module scenario
+    if has_cross_module:
+        module_details = []
+        for module, count in sorted(module_dist.items(), key=lambda x: x[1], reverse=True):
+            module_details.append(f'"{module}" ({count} chunks)')
+
+        modules_str = ", ".join(module_details[:4])
+        if num_modules > 4:
+            modules_str += f" and {num_modules - 4} more"
+
+        return f"""
+📋 KNOWLEDGE SPAN:
+- {num_modules} modules: {modules_str}
+- {num_subsections} subsections across {num_docs} document(s)
+
+⚠️  IMPORTANT: If the question involves multiple modules, clearly distinguish between them in your answer.
+Use the Location paths to identify which module each information comes from.
+"""
+
+    # Multi-section within same module
+    sections_list = ", ".join(list(structure.get('sections', set()))[:5])
+    if len(structure.get('sections', set())) > 5:
+        sections_list += f" and {len(structure.get('sections', set())) - 5} more"
 
     return f"""
-Note: Your knowledge spans {num_sections} sections ({sections_list}) across {num_docs} document(s).
-Organize your answer accordingly if multiple sections are relevant.
+Note: Your knowledge spans {num_subsections} subsections ({sections_list}) across {num_docs} document(s).
+Organize your answer using the Location paths if multiple sections are relevant.
 """

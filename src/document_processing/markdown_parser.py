@@ -398,6 +398,80 @@ class MarkdownDocumentParser:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
+    def parse_docx(self, file_path: str) -> Dict:
+        """
+        Parse a DOCX file and return structured markdown content.
+
+        Args:
+            file_path: Path to the DOCX file
+
+        Returns:
+            Dictionary containing:
+                - markdown_content: Full markdown text
+                - metadata: Document metadata (pages, file info, etc.)
+                - table_elements: List of table dicts with metadata
+                - text_elements: List of text section dicts with metadata
+                - file_hash: MD5 hash of the file
+
+        Raises:
+            FileNotFoundError: If the DOCX file doesn't exist
+            Exception: If docling conversion fails
+        """
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"DOCX file not found: {file_path}")
+
+        # Compute file hash for tracking
+        file_hash = self._compute_file_hash(file_path)
+
+        try:
+            # Convert DOCX to docling document
+            result = self.converter.convert(file_path)
+            doc = result.document
+
+            # Export to markdown
+            markdown_content = doc.export_to_markdown()
+
+            # Get page count from docling document (DOCX doesn't have pages like PDF)
+            # For DOCX, we'll report 1 page or use document sections if available
+            try:
+                num_pages = len(doc.pages) if hasattr(doc, 'pages') else 1
+            except:
+                num_pages = 1  # Fallback
+
+            # Analyze and extract tables from markdown
+            table_elements, text_with_markers = self._analyze_tables(markdown_content)
+
+            # Extract text sections with headers
+            text_elements = self._extract_text_sections(text_with_markers)
+
+            # Build hierarchical structure for enhanced metadata
+            hierarchy_structure = self._build_hierarchical_structure(text_elements)
+
+            # Extract document metadata
+            metadata = {
+                "file_name": file_path_obj.name,
+                "file_path": str(file_path_obj.absolute()),
+                "file_hash": file_hash,
+                "num_pages": num_pages,
+                "total_chars": len(markdown_content),
+                "total_tokens": len(self.tokenizer.encode(markdown_content)),
+                "num_tables": len(table_elements),
+                "num_sections": len(text_elements),
+            }
+
+            return {
+                "markdown_content": markdown_content,
+                "metadata": metadata,
+                "table_elements": table_elements,
+                "text_elements": text_elements,
+                "hierarchy_structure": hierarchy_structure,
+                "file_hash": file_hash,
+            }
+
+        except Exception as e:
+            raise Exception(f"Docling conversion failed for {file_path}: {str(e)}")
+
     def parse_pdf_to_markdown(self, file_path: str) -> str:
         """
         Simple helper to get just the markdown content.

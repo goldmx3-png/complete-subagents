@@ -163,16 +163,17 @@ class EnhancedRAGRetriever:
         if settings.enable_reranking and self.reranker and len(results) > 0:
             rerank_start = time.time()
             try:
+                # Use reranker_return_top_k for final count (e.g., 5), not final_top_k (e.g., 20)
                 results = await self.reranker.rerank(
                     query=rewritten_query,
                     documents=results,
-                    top_k=final_top_k
+                    top_k=settings.reranker_return_top_k
                 )
                 retrieval_method += "+reranked"
                 logger.info(f"Reranking complete, returning top {len(results)}")
             except Exception as e:
                 logger.error(f"Reranking failed: {str(e)}, using original results")
-                results = results[:final_top_k]
+                results = results[:settings.reranker_return_top_k]
             timing["reranking"] = (time.time() - rerank_start) * 1000
         else:
             # No reranking, just take top-k
@@ -328,40 +329,81 @@ class EnhancedRAGRetriever:
 
     def _format_context_with_grouping(self, chunks: List[Dict]) -> str:
         """
-        Format context with section grouping for better organization.
+        Format context with h1 > h2 level grouping for better module distinction.
 
         Args:
             chunks: List of chunks to format
 
         Returns:
-            Formatted context string grouped by sections
+            Formatted context string grouped by h1 > h2 hierarchy
         """
         from collections import defaultdict
 
-        # Group chunks by their hierarchical path
+        # Group chunks by h1 > h2 hierarchical path
         section_groups = defaultdict(list)
+        module_stats = defaultdict(int)  # Track chunks per module
 
         for chunk in chunks:
             payload = chunk.get("payload", {})
             metadata = payload.get("metadata", {})
             hierarchy = metadata.get("hierarchy", {})
 
-            # Determine grouping key
-            if hierarchy and "root_section" in hierarchy:
-                group_key = hierarchy["root_section"]
+            # Determine grouping key using h1 > h2 hierarchy
+            if hierarchy and "breadcrumbs" in hierarchy:
+                breadcrumbs = hierarchy["breadcrumbs"]
+                if len(breadcrumbs) >= 2:
+                    # Use h1 > h2 format (skip "Document Start" if present)
+                    h1 = breadcrumbs[1] if breadcrumbs[0].lower() in ['document start', 'document'] else breadcrumbs[0]
+                    h2 = breadcrumbs[2] if len(breadcrumbs) > 2 else "General"
+                    group_key = f"{h1} > {h2}"
+                    module_stats[h1] += 1
+                elif len(breadcrumbs) == 1:
+                    group_key = breadcrumbs[0]
+                    module_stats[breadcrumbs[0]] += 1
+                else:
+                    group_key = "General"
+            elif hierarchy and "root_section" in hierarchy:
+                # Fallback to old behavior
+                root = hierarchy["root_section"]
+                parent = hierarchy.get("parent_section", "")
+                if parent and parent != root:
+                    group_key = f"{root} > {parent}"
+                else:
+                    group_key = root
+                module_stats[root] += 1
             elif "header_context" in metadata:
-                # Fallback: use first part of header_context
+                # Fallback: use header_context
                 header_context = metadata["header_context"]
-                group_key = header_context.split(" > ")[0] if header_context else "General"
+                parts = header_context.split(" > ")
+                if len(parts) >= 2:
+                    group_key = f"{parts[0]} > {parts[1]}"
+                    module_stats[parts[0]] += 1
+                else:
+                    group_key = parts[0] if parts else "General"
+                    module_stats[group_key] += 1
             else:
                 group_key = "General"
 
             section_groups[group_key].append(chunk)
 
-        # Format grouped sections
+        # Add module distribution header if cross-module query detected
         formatted_sections = []
+        num_modules = len(module_stats)
+        if num_modules > 1:
+            module_summary = ", ".join([f"{module} ({count})"
+                                       for module, count in sorted(module_stats.items(),
+                                                                  key=lambda x: x[1],
+                                                                  reverse=True)])
+            formatted_sections.append(
+                f"\n{'='*70}\n"
+                f"📊 MODULE DISTRIBUTION: {module_summary}\n"
+                f"{'='*70}\n"
+            )
 
-        for section_name, section_chunks in section_groups.items():
+        # Format grouped sections (sort by relevance of best chunk in group)
+        for section_name, section_chunks in sorted(section_groups.items(),
+                                                    key=lambda x: max(c.get('score', 0) for c in x[1]),
+                                                    reverse=True):
             section_header = f"\n{'='*60}\n📂 {section_name}\n{'='*60}\n"
             formatted_sections.append(section_header)
 

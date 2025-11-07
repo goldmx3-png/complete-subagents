@@ -9,6 +9,7 @@ from src.agents.shared.state import AgentState, RAGState
 from src.llm.openrouter_client import OpenRouterClient
 from src.retrieval.enhanced_retriever import EnhancedRAGRetriever
 from src.retrieval.context_organizer import auto_detect_structure, get_adaptive_system_prompt, format_context_note
+from src.retrieval.module_analyzer import analyze_module_distribution, detect_cross_module_query
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -271,6 +272,14 @@ class RAGAgent(BaseAgent):
             structure = auto_detect_structure(chunks)
             system_prompt = get_adaptive_system_prompt(structure)
             context_note = format_context_note(structure)
+
+            # Analyze module distribution for debugging and monitoring
+            module_analysis = analyze_module_distribution(chunks)
+            is_cross_module, reason = detect_cross_module_query(chunks)
+
+            if is_cross_module:
+                logger.info(f"Cross-module query detected: {reason}")
+                logger.debug(f"Module distribution: {module_analysis['modules']}")
         else:
             # Fallback to original prompt
             system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.
@@ -367,6 +376,14 @@ Instructions: {quality_instruction} Remember to answer naturally as an expert - 
             structure = auto_detect_structure(chunks)
             system_prompt = get_adaptive_system_prompt(structure)
             context_note = format_context_note(structure)
+
+            # Analyze module distribution for debugging and monitoring
+            module_analysis = analyze_module_distribution(chunks)
+            is_cross_module, reason = detect_cross_module_query(chunks)
+
+            if is_cross_module:
+                logger.info(f"Cross-module query detected (streaming): {reason}")
+                logger.debug(f"Module distribution: {module_analysis['modules']}")
         else:
             # Fallback to original prompt
             system_prompt = """You are a banking operations expert. Answer questions directly and confidently as if you personally know this information.

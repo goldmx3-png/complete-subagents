@@ -123,6 +123,8 @@ class DocumentUploader:
             logger.info(f"Parsing document: type={file_ext}, parser={'markdown' if self.use_markdown else 'standard'}")
             if file_ext == ".pdf":
                 parsed_doc = self.parser.parse_pdf(str(dest_path))
+            elif file_ext == ".docx":
+                parsed_doc = self.parser.parse_docx(str(dest_path))
             elif file_ext == ".txt":
                 parsed_doc = self.parser.parse_text_file(str(dest_path))
             else:

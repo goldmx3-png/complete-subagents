@@ -159,3 +159,21 @@ class DocumentParser:
             "table_elements": [],
             "title_elements": []
         }
+
+    def parse_docx(self, file_path: str) -> Dict:
+        """
+        Parse DOCX file - requires markdown parser with docling.
+
+        This is a stub method. DOCX parsing is only supported with MarkdownDocumentParser.
+        To enable DOCX support, set USE_MARKDOWN_CHUNKING=true in your configuration.
+
+        Args:
+            file_path: Path to DOCX file
+
+        Raises:
+            NotImplementedError: Always raised as DOCX requires markdown parser
+        """
+        raise NotImplementedError(
+            "DOCX file parsing requires the MarkdownDocumentParser with docling. "
+            "Please set USE_MARKDOWN_CHUNKING=true in your configuration to enable DOCX support."
+        )
