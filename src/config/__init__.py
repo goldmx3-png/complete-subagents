@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     enable_breadcrumb_context: bool = os.getenv("ENABLE_BREADCRUMB_CONTEXT", "true").lower() == "true"
     metadata_filter_by_section: bool = os.getenv("METADATA_FILTER_BY_SECTION", "false").lower() == "true"
 
+    # Context Formatting Limits (to prevent bloated prompts)
+    max_formatted_chunk_size_chars: int = int(os.getenv("MAX_FORMATTED_CHUNK_SIZE_CHARS", "4000"))
+    max_total_context_size_chars: int = int(os.getenv("MAX_TOTAL_CONTEXT_SIZE_CHARS", "20000"))
+    breadcrumb_max_levels: int = int(os.getenv("BREADCRUMB_MAX_LEVELS", "3"))
+    breadcrumb_max_length: int = int(os.getenv("BREADCRUMB_MAX_LENGTH", "80"))
+    formatting_style: str = os.getenv("FORMATTING_STYLE", "minimal")  # minimal, normal, detailed
+    enable_auto_fallback: bool = os.getenv("ENABLE_AUTO_FALLBACK", "true").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

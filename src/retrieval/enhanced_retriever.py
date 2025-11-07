@@ -270,6 +270,7 @@ class EnhancedRAGRetriever:
     ) -> str:
         """
         Format retrieved chunks into context for LLM with hierarchical metadata.
+        Includes automatic fallback to simple formatting if context exceeds size limits.
 
         Args:
             chunks: Retrieved chunks
@@ -282,15 +283,125 @@ class EnhancedRAGRetriever:
         max_chunks = max_chunks or settings.max_chunks_per_query
         top_chunks = chunks[:max_chunks]
 
-        # Check if section grouping is enabled
+        # Try grouping formatting first if enabled
         if settings.enable_section_grouping:
-            return self._format_context_with_grouping(top_chunks)
+            formatted_context = self._format_context_with_grouping(top_chunks)
+
+            # Check if formatted context exceeds limits
+            context_size = len(formatted_context)
+            max_size = settings.max_total_context_size_chars
+
+            # Automatic fallback if too large and fallback is enabled
+            if settings.enable_auto_fallback and context_size > max_size:
+                logger.warning(
+                    f"Context size ({context_size} chars) exceeds limit ({max_size} chars). "
+                    f"Falling back to simple formatting."
+                )
+                formatted_context = self._format_context_simple(top_chunks)
+                logger.info(f"Simple formatting resulted in {len(formatted_context)} chars")
+
+            return formatted_context
         else:
             return self._format_context_simple(top_chunks)
+
+    def _truncate_breadcrumb(self, breadcrumb_path: str, max_levels: int = None, max_length: int = None) -> str:
+        """
+        Truncate breadcrumb path to show only last N levels and limit total length.
+
+        Args:
+            breadcrumb_path: Full breadcrumb path (e.g., "A > B > C > D > E")
+            max_levels: Maximum number of levels to show (default: from settings)
+            max_length: Maximum character length (default: from settings)
+
+        Returns:
+            Truncated breadcrumb (e.g., "...C > D > E")
+        """
+        max_levels = max_levels or settings.breadcrumb_max_levels
+        max_length = max_length or settings.breadcrumb_max_length
+
+        # Split breadcrumb into parts
+        parts = [p.strip() for p in breadcrumb_path.split(">")]
+
+        # Apply level limit
+        if len(parts) > max_levels:
+            parts = ["..."] + parts[-max_levels:]
+
+        # Reconstruct
+        result = " > ".join(parts)
+
+        # Apply length limit
+        if len(result) > max_length:
+            # Truncate and add ellipsis
+            result = result[:max_length - 3] + "..."
+
+        return result
+
+    def _format_chunk_header(self, section_name: str, chunk_index: int, score: float,
+                            location: str = None, style: str = None) -> str:
+        """
+        Format chunk header based on formatting style.
+
+        Args:
+            section_name: Section name
+            chunk_index: Chunk index within section
+            score: Relevance score
+            location: Optional breadcrumb location
+            style: Formatting style (minimal, normal, detailed)
+
+        Returns:
+            Formatted header string
+        """
+        style = style or settings.formatting_style
+
+        if style == "minimal":
+            # Minimal: Just section and score
+            header = f"[{section_name}]"
+            if location:
+                header += f" {location}"
+            header += f" | Score: {score:.2f}\n"
+            return header
+
+        elif style == "normal":
+            # Normal: Section, location, score
+            header = f"[{section_name} - Chunk {chunk_index}]\n"
+            if location:
+                header += f"Location: {location}\n"
+            header += f"Relevance: {score:.2f}\n"
+            return header
+
+        else:  # detailed
+            # Detailed: Full formatting with emojis (old style)
+            header = f"[{section_name} - Chunk {chunk_index}]"
+            if location:
+                header += f"\n📍 Location: {location}"
+            header += f"\n⚖️  Relevance: {score:.2f}\n"
+            return header
+
+    def _truncate_chunk_text(self, text: str, max_chars: int = None) -> str:
+        """
+        Truncate chunk text if it exceeds maximum character limit.
+
+        Args:
+            text: Chunk text
+            max_chars: Maximum characters (default: from settings)
+
+        Returns:
+            Truncated text with indicator if truncated
+        """
+        max_chars = max_chars or settings.max_formatted_chunk_size_chars
+
+        if len(text) <= max_chars:
+            return text
+
+        # Truncate and add indicator
+        truncate_msg = "\n\n[...content truncated due to size...]"
+        available_chars = max_chars - len(truncate_msg)
+        return text[:available_chars] + truncate_msg
 
     def _format_context_simple(self, chunks: List[Dict]) -> str:
         """
         Simple formatting without section grouping (backward compatible).
+        Now includes size limits and breadcrumb truncation.
 
         Args:
             chunks: List of chunks to format
@@ -312,7 +423,9 @@ class EnhancedRAGRetriever:
             if settings.enable_breadcrumb_context:
                 hierarchy = metadata.get("hierarchy", {})
                 if hierarchy and "full_path" in hierarchy:
-                    chunk_text += f"\nModule: {hierarchy['full_path']}"
+                    # Truncate breadcrumb path
+                    truncated_path = self._truncate_breadcrumb(hierarchy['full_path'])
+                    chunk_text += f"\nModule: {truncated_path}"
                 else:
                     # Fallback to old header_context
                     header_context = metadata.get("header_context", "")
@@ -322,20 +435,27 @@ class EnhancedRAGRetriever:
                     elif section_title and section_title != "General Information":
                         chunk_text += f"\nSection: {section_title}"
 
-            chunk_text += f"\nRelevance: {score:.2f}\n{text}"
+            # Truncate text if needed
+            truncated_text = self._truncate_chunk_text(text)
+            chunk_text += f"\nRelevance: {score:.2f}\n{truncated_text}"
             formatted_chunks.append(chunk_text)
 
-        return "\n\n---\n\n".join(formatted_chunks)
+        result = "\n\n---\n\n".join(formatted_chunks)
+
+        # Log the formatted context size
+        logger.info(f"Simple formatted context size: {len(result)} chars (from {len(chunks)} chunks)")
+
+        return result
 
     def _format_context_with_grouping(self, chunks: List[Dict]) -> str:
         """
-        Format context with h1 > h2 level grouping for better module distinction.
+        Format context with h1 > h2 level grouping (OPTIMIZED - minimal formatting).
 
         Args:
             chunks: List of chunks to format
 
         Returns:
-            Formatted context string grouped by h1 > h2 hierarchy
+            Formatted context string grouped by h1 > h2 hierarchy with size limits
         """
         from collections import defaultdict
 
@@ -386,50 +506,61 @@ class EnhancedRAGRetriever:
 
             section_groups[group_key].append(chunk)
 
-        # Add module distribution header if cross-module query detected
+        # Format sections with minimal overhead
         formatted_sections = []
         num_modules = len(module_stats)
-        if num_modules > 1:
+
+        # Add module distribution header only if cross-module (minimal style)
+        if num_modules > 1 and settings.formatting_style != "minimal":
             module_summary = ", ".join([f"{module} ({count})"
                                        for module, count in sorted(module_stats.items(),
                                                                   key=lambda x: x[1],
                                                                   reverse=True)])
-            formatted_sections.append(
-                f"\n{'='*70}\n"
-                f"📊 MODULE DISTRIBUTION: {module_summary}\n"
-                f"{'='*70}\n"
-            )
+            # Shorter separator for minimal style
+            sep_line = "=" * 40
+            formatted_sections.append(f"\n{sep_line}\nModules: {module_summary}\n{sep_line}\n")
 
         # Format grouped sections (sort by relevance of best chunk in group)
         for section_name, section_chunks in sorted(section_groups.items(),
                                                     key=lambda x: max(c.get('score', 0) for c in x[1]),
                                                     reverse=True):
-            section_header = f"\n{'='*60}\n📂 {section_name}\n{'='*60}\n"
-            formatted_sections.append(section_header)
+            # Minimal section header (shorter separator)
+            sep_line = "=" * 40
+            formatted_sections.append(f"\n{sep_line}\n{section_name}\n{sep_line}")
 
             for i, chunk in enumerate(section_chunks, 1):
                 payload = chunk.get("payload", {})
                 text = payload.get("text", "")
-                doc_id = payload.get("doc_id", "Document")
                 score = chunk.get("score", 0.0)
                 metadata = payload.get("metadata", {})
                 hierarchy = metadata.get("hierarchy", {})
 
-                chunk_text = f"[{section_name} - Chunk {i}]"
+                # Get and truncate location path
+                location = None
+                if settings.enable_breadcrumb_context and hierarchy and "full_path" in hierarchy:
+                    location = self._truncate_breadcrumb(hierarchy["full_path"])
 
-                # Add full hierarchical path if available
-                if settings.enable_breadcrumb_context and hierarchy:
-                    if "full_path" in hierarchy:
-                        chunk_text += f"\n📍 Location: {hierarchy['full_path']}"
+                # Use helper to format header based on style
+                chunk_header = self._format_chunk_header(
+                    section_name=section_name,
+                    chunk_index=i,
+                    score=score,
+                    location=location
+                )
 
-                    # Add depth indicator
-                    if "depth" in hierarchy:
-                        chunk_text += f" (Level {hierarchy['depth']})"
+                # Truncate text if needed
+                truncated_text = self._truncate_chunk_text(text)
 
-                chunk_text += f"\n⚖️  Relevance: {score:.2f}\n\n{text}"
-                formatted_sections.append(chunk_text)
+                # Combine header and text
+                formatted_chunk = chunk_header + truncated_text
+                formatted_sections.append(formatted_chunk)
 
-        return "\n\n".join(formatted_sections)
+        result = "\n\n".join(formatted_sections)
+
+        # Log the formatted context size
+        logger.info(f"Formatted context size: {len(result)} chars (from {len(chunks)} chunks)")
+
+        return result
 
 
 async def get_enhanced_retriever() -> EnhancedRAGRetriever:
