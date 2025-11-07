@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     use_query_rewriting: bool = os.getenv("USE_QUERY_REWRITING", "true").lower() == "true"
     query_rewrite_cache_ttl: int = int(os.getenv("QUERY_REWRITE_CACHE_TTL", "86400"))  # 24 hours
 
+    # Agentic RAG Settings
+    agentic_rag_enabled: bool = os.getenv("AGENTIC_RAG_ENABLED", "true").lower() == "true"
+    agentic_rag_max_iterations: int = int(os.getenv("AGENTIC_RAG_MAX_ITERATIONS", "3"))
+    agentic_rag_min_relevant_docs: int = int(os.getenv("AGENTIC_RAG_MIN_RELEVANT_DOCS", "2"))
+    agentic_rag_retrieval_top_k: int = int(os.getenv("AGENTIC_RAG_RETRIEVAL_TOP_K", "10"))
+    agentic_rag_timeout: int = int(os.getenv("AGENTIC_RAG_TIMEOUT", "30000"))  # 30 seconds
+    grading_confidence_threshold: float = float(os.getenv("GRADING_CONFIDENCE_THRESHOLD", "0.7"))
+    enable_parallel_grading: bool = os.getenv("ENABLE_PARALLEL_GRADING", "true").lower() == "true"
+    enable_query_cache: bool = os.getenv("ENABLE_QUERY_CACHE", "true").lower() == "true"
+    enable_early_exit: bool = os.getenv("ENABLE_EARLY_EXIT", "true").lower() == "true"
+    agentic_rag_min_query_length: int = int(os.getenv("AGENTIC_RAG_MIN_QUERY_LENGTH", "8"))
+
     # API Settings
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
@@ -90,6 +102,63 @@ class Settings(BaseSettings):
     banking_api_max_retries: int = int(os.getenv("BANKING_API_MAX_RETRIES", "3"))
     banking_api_verify_ssl: bool = os.getenv("BANKING_API_VERIFY_SSL", "true").lower() == "true"
 
+    # Enhanced Retrieval (2025)
+    # Hybrid Search (Vector + BM25)
+    enable_hybrid_search: bool = os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true"
+    hybrid_vector_weight: float = float(os.getenv("HYBRID_VECTOR_WEIGHT", "0.7"))
+    hybrid_bm25_weight: float = float(os.getenv("HYBRID_BM25_WEIGHT", "0.3"))
+    bm25_k1: float = float(os.getenv("BM25_K1", "1.5"))
+    bm25_b: float = float(os.getenv("BM25_B", "0.75"))
+
+    # Reranking Configuration
+    enable_reranking: bool = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
+    reranker_model_v2: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")  # Smaller, faster model
+    reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", "20"))
+    reranker_return_top_k: int = int(os.getenv("RERANKER_RETURN_TOP_K", "5"))
+    reranker_device_v2: str = os.getenv("RERANKER_DEVICE", "cpu")
+    reranker_batch_size: int = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
+    reranker_load_timeout: int = int(os.getenv("RERANKER_LOAD_TIMEOUT", "300"))  # 5 minutes default
+
+    # Token-Based Chunking
+    chunk_size_tokens: int = int(os.getenv("CHUNK_SIZE_TOKENS", "600"))
+    chunk_overlap_percentage: int = int(os.getenv("CHUNK_OVERLAP_PERCENTAGE", "15"))
+    use_token_based_chunking: bool = os.getenv("USE_TOKEN_BASED_CHUNKING", "true").lower() == "true"
+
+    # Semantic Chunking
+    use_semantic_chunking: bool = os.getenv("USE_SEMANTIC_CHUNKING", "false").lower() == "true"
+    semantic_chunk_min_tokens: int = int(os.getenv("SEMANTIC_CHUNK_MIN_TOKENS", "200"))
+    semantic_chunk_max_tokens: int = int(os.getenv("SEMANTIC_CHUNK_MAX_TOKENS", "800"))
+    semantic_chunk_model: str = os.getenv("SEMANTIC_CHUNK_MODEL", "mistralai/mistral-small-latest")
+    preserve_tables: bool = os.getenv("PRESERVE_TABLES", "true").lower() == "true"
+
+    # Markdown-Based Chunking (with docling PDF parser)
+    use_markdown_chunking: bool = os.getenv("USE_MARKDOWN_CHUNKING", "false").lower() == "true"
+    markdown_chunk_size_tokens: int = int(os.getenv("MARKDOWN_CHUNK_SIZE_TOKENS", "600"))
+    markdown_chunk_overlap_percentage: int = int(os.getenv("MARKDOWN_CHUNK_OVERLAP_PERCENTAGE", "15"))
+    markdown_table_size_threshold: int = int(os.getenv("MARKDOWN_TABLE_SIZE_THRESHOLD", "500"))
+    markdown_preserve_headers: bool = os.getenv("MARKDOWN_PRESERVE_HEADERS", "true").lower() == "true"
+    docling_extract_tables: bool = os.getenv("DOCLING_EXTRACT_TABLES", "true").lower() == "true"
+    docling_extract_images: bool = os.getenv("DOCLING_EXTRACT_IMAGES", "false").lower() == "true"
+
+    # Hierarchical Metadata Configuration
+    enable_hierarchical_metadata: bool = os.getenv("ENABLE_HIERARCHICAL_METADATA", "true").lower() == "true"
+    hierarchy_max_depth: int = int(os.getenv("HIERARCHY_MAX_DEPTH", "6"))
+    hierarchy_include_siblings: bool = os.getenv("HIERARCHY_INCLUDE_SIBLINGS", "true").lower() == "true"
+    hierarchy_include_navigation: bool = os.getenv("HIERARCHY_INCLUDE_NAVIGATION", "true").lower() == "true"
+
+    # Retrieval Enhancement Configuration
+    enable_section_grouping: bool = os.getenv("ENABLE_SECTION_GROUPING", "true").lower() == "true"
+    enable_breadcrumb_context: bool = os.getenv("ENABLE_BREADCRUMB_CONTEXT", "true").lower() == "true"
+    metadata_filter_by_section: bool = os.getenv("METADATA_FILTER_BY_SECTION", "false").lower() == "true"
+
+    # Context Formatting Limits (to prevent bloated prompts)
+    max_formatted_chunk_size_chars: int = int(os.getenv("MAX_FORMATTED_CHUNK_SIZE_CHARS", "4000"))
+    max_total_context_size_chars: int = int(os.getenv("MAX_TOTAL_CONTEXT_SIZE_CHARS", "20000"))
+    breadcrumb_max_levels: int = int(os.getenv("BREADCRUMB_MAX_LEVELS", "3"))
+    breadcrumb_max_length: int = int(os.getenv("BREADCRUMB_MAX_LENGTH", "80"))
+    formatting_style: str = os.getenv("FORMATTING_STYLE", "minimal")  # minimal, normal, detailed
+    enable_auto_fallback: bool = os.getenv("ENABLE_AUTO_FALLBACK", "true").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -98,3 +167,8 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get the global settings instance"""
+    return settings
