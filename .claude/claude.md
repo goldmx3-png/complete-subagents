@@ -24,7 +24,6 @@ This project is a **multi-agent customer support system for corporate banking po
 ```
 Orchestrator (Intent Detection & Routing)
     ├── RAG Agent (Document retrieval, query reformulation, answer generation)
-    │   └── Agentic RAG (Multi-step retrieval with validation and refinement)
     ├── API Agent (Banking API integration, product classification)
     ├── Menu Agent (Intent classification, navigation assistance)
     └── Support Agent (FAQ search, ticket creation, knowledge base)
@@ -41,12 +40,12 @@ Orchestrator (Intent Detection & Routing)
 
 ### Key Features
 
-- Agentic RAG with iterative refinement
-- Parallel document grading (9x faster)
+- Advanced RAG with hybrid search (vector + BM25)
+- Reranking for improved relevance
 - Query rewriting and caching
 - Conversation memory with context
 - Streaming responses
-- Document relevance validation
+- Hierarchical metadata extraction
 
 ---
 

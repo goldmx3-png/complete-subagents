@@ -2,12 +2,16 @@
 Document processing module
 """
 
-from src.document_processing.parser import DocumentParser
-from src.document_processing.chunker import DocumentChunker
-from src.document_processing.smart_chunker import SmartDocumentChunker
+from src.document_processing.markdown_parser import MarkdownDocumentParser
+from src.document_processing.markdown_chunker import MarkdownChunker
+from src.document_processing.semantic_chunker import SemanticChunker
+from src.document_processing.chunker_factory import ChunkerFactory
+from src.document_processing.uploader import DocumentUploader
 
 __all__ = [
-    "DocumentParser",
-    "DocumentChunker",
-    "SmartDocumentChunker"
+    "MarkdownDocumentParser",
+    "MarkdownChunker",
+    "SemanticChunker",
+    "ChunkerFactory",
+    "DocumentUploader"
 ]

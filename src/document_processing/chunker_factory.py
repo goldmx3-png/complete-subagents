@@ -7,8 +7,6 @@ and DocumentUploader always defaulted to the basic DocumentChunker.
 
 from typing import Optional
 from src.config import settings
-from src.document_processing.chunker import DocumentChunker
-from src.document_processing.token_chunker import TokenBasedChunker
 from src.document_processing.semantic_chunker import SemanticChunker
 
 
@@ -17,10 +15,8 @@ class ChunkerFactory:
     Factory class for creating document chunkers based on configuration.
 
     Selection priority:
-    1. USE_MARKDOWN_CHUNKING → MarkdownChunker
+    1. USE_MARKDOWN_CHUNKING → MarkdownChunker (default)
     2. USE_SEMANTIC_CHUNKING → SemanticChunker
-    3. USE_TOKEN_BASED_CHUNKING → TokenBasedChunker
-    4. Default → DocumentChunker (character-based)
     """
 
     @staticmethod
@@ -31,24 +27,22 @@ class ChunkerFactory:
         Returns:
             A chunker instance configured according to environment settings.
 
+        Raises:
+            ValueError: If no valid chunker is configured.
+
         Note:
             This method checks flags in priority order and returns the first
-            enabled chunker. If no flags are set, returns basic DocumentChunker.
+            enabled chunker.
         """
-        # Priority 1: Markdown-based chunking (when implemented)
+        # Priority 1: Markdown-based chunking (default)
         if settings.use_markdown_chunking:
-            # Import here to avoid circular dependencies
-            try:
-                from src.document_processing.markdown_chunker import MarkdownChunker
-                return MarkdownChunker(
-                    chunk_size_tokens=settings.markdown_chunk_size_tokens,
-                    chunk_overlap_percentage=settings.markdown_chunk_overlap_percentage,
-                    table_size_threshold=settings.markdown_table_size_threshold,
-                    preserve_headers=settings.markdown_preserve_headers,
-                )
-            except ImportError:
-                print("Warning: MarkdownChunker not yet implemented, falling back to next option")
-                # Fall through to next option
+            from src.document_processing.markdown_chunker import MarkdownChunker
+            return MarkdownChunker(
+                chunk_size_tokens=settings.markdown_chunk_size_tokens,
+                chunk_overlap_percentage=settings.markdown_chunk_overlap_percentage,
+                table_size_threshold=settings.markdown_table_size_threshold,
+                preserve_headers=settings.markdown_preserve_headers,
+            )
 
         # Priority 2: Semantic chunking (LLM-based boundary detection)
         if settings.use_semantic_chunking:
@@ -58,18 +52,9 @@ class ChunkerFactory:
                 model_name=settings.semantic_chunk_model,
             )
 
-        # Priority 3: Token-based chunking (recommended for production)
-        if settings.use_token_based_chunking:
-            return TokenBasedChunker(
-                chunk_size_tokens=settings.chunk_size_tokens,
-                chunk_overlap_percentage=settings.chunk_overlap_percentage,
-                preserve_tables=settings.preserve_tables,
-            )
-
-        # Default: Character-based chunking (legacy)
-        return DocumentChunker(
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap,
+        # No chunker configured
+        raise ValueError(
+            "No chunker configured. Please enable either USE_MARKDOWN_CHUNKING or USE_SEMANTIC_CHUNKING in your .env file."
         )
 
     @staticmethod
@@ -84,10 +69,8 @@ class ChunkerFactory:
             return "MarkdownChunker"
         elif settings.use_semantic_chunking:
             return "SemanticChunker"
-        elif settings.use_token_based_chunking:
-            return "TokenBasedChunker"
         else:
-            return "DocumentChunker"
+            return "None"
 
     @staticmethod
     def get_chunker_info() -> dict:
@@ -116,17 +99,6 @@ class ChunkerFactory:
                 "min_tokens": settings.semantic_chunk_min_tokens,
                 "max_tokens": settings.semantic_chunk_max_tokens,
                 "model_name": settings.semantic_chunk_model,
-            }
-        elif chunker_name == "TokenBasedChunker":
-            info["configuration"] = {
-                "chunk_size_tokens": settings.chunk_size_tokens,
-                "chunk_overlap_percentage": settings.chunk_overlap_percentage,
-                "preserve_tables": settings.preserve_tables,
-            }
-        else:  # DocumentChunker
-            info["configuration"] = {
-                "chunk_size": settings.chunk_size,
-                "chunk_overlap": settings.chunk_overlap,
             }
 
         return info
