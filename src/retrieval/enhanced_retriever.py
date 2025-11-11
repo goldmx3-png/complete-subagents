@@ -58,6 +58,46 @@ class EnhancedRAGRetriever:
             self.reranker = get_reranker()
             logger.info("Reranking enabled")
 
+    def _log_chunk_details(self, chunks: List[Dict], stage: str, max_chunks_to_log: int = 20):
+        """
+        Log detailed information about retrieved chunks for debugging.
+
+        Args:
+            chunks: List of chunks to log
+            stage: Which stage of retrieval (e.g., "Initial Retrieval", "After Reranking")
+            max_chunks_to_log: Maximum number of chunks to log details for
+        """
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"{stage}: {len(chunks)} chunks")
+        logger.debug(f"{'='*80}")
+
+        for i, chunk in enumerate(chunks[:max_chunks_to_log], 1):
+            payload = chunk.get("payload", {})
+            score = chunk.get("score", 0.0)
+            text = payload.get("text", "")[:200]  # First 200 chars
+            doc_id = payload.get("doc_id", "Unknown")
+            metadata = payload.get("metadata", {})
+            hierarchy = metadata.get("hierarchy", {})
+
+            # Extract section information
+            section_path = "No hierarchy"
+            if hierarchy:
+                if "full_path" in hierarchy:
+                    section_path = hierarchy["full_path"]
+                elif "breadcrumbs" in hierarchy:
+                    section_path = " > ".join(hierarchy["breadcrumbs"])
+                elif "root_section" in hierarchy:
+                    section_path = hierarchy["root_section"]
+
+            logger.debug(f"\nChunk #{i}:")
+            logger.debug(f"  Score: {score:.4f}")
+            logger.debug(f"  Doc ID: {doc_id}")
+            logger.debug(f"  Section: {section_path}")
+            logger.debug(f"  Text preview: {text}...")
+
+        if len(chunks) > max_chunks_to_log:
+            logger.debug(f"\n... and {len(chunks) - max_chunks_to_log} more chunks")
+
     async def retrieve(
         self,
         query: str,
@@ -106,9 +146,13 @@ class EnhancedRAGRetriever:
                 rewritten_query = await self.query_rewriter.rewrite_query(query)
                 if rewritten_query != query:
                     logger.info(f"Query rewritten: '{query[:50]}...' → '{rewritten_query[:50]}...'")
+                    logger.debug(f"FULL Original query: {query}")
+                    logger.debug(f"FULL Rewritten query: {rewritten_query}")
             except Exception as e:
                 logger.warning(f"Query rewriting failed: {str(e)}")
                 rewritten_query = query
+        else:
+            logger.debug(f"Query rewriting disabled, using original query: {query}")
         timing["query_rewriting"] = (time.time() - rewrite_start) * 1000
 
         # Step 2: Generate embedding
@@ -132,6 +176,7 @@ class EnhancedRAGRetriever:
             )
             retrieval_method = "hybrid"
             logger.info(f"Hybrid search returned {len(results)} results")
+            self._log_chunk_details(results, "Initial Hybrid Retrieval")
         else:
             # Fallback to vector-only search
             results = await self.vectorstore.search(
@@ -141,6 +186,7 @@ class EnhancedRAGRetriever:
                 doc_id=doc_id
             )
             logger.info(f"Vector search returned {len(results)} results")
+            self._log_chunk_details(results, "Initial Vector Retrieval")
 
         timing["retrieval"] = (time.time() - retrieval_start) * 1000
 
@@ -155,6 +201,8 @@ class EnhancedRAGRetriever:
             ]
             if len(results) < pre_filter_count:
                 logger.info(f"Filtered by min_similarity_score: {pre_filter_count} → {len(results)}")
+                logger.debug(f"Similarity threshold: {settings.min_similarity_score}")
+                self._log_chunk_details(results, "After Similarity Filtering")
         else:
             logger.debug("Skipping min_similarity_score filter for hybrid search (fusion already handles quality)")
         timing["filtering"] = (time.time() - filter_start) * 1000
@@ -163,6 +211,7 @@ class EnhancedRAGRetriever:
         if settings.enable_reranking and self.reranker and len(results) > 0:
             rerank_start = time.time()
             try:
+                logger.debug(f"Reranking {len(results)} candidates, will return top {settings.reranker_return_top_k}")
                 # Use reranker_return_top_k for final count (e.g., 5), not final_top_k (e.g., 20)
                 results = await self.reranker.rerank(
                     query=rewritten_query,
@@ -171,6 +220,7 @@ class EnhancedRAGRetriever:
                 )
                 retrieval_method += "+reranked"
                 logger.info(f"Reranking complete, returning top {len(results)}")
+                self._log_chunk_details(results, "After Reranking (FINAL)")
             except Exception as e:
                 logger.error(f"Reranking failed: {str(e)}, using original results")
                 results = results[:settings.reranker_return_top_k]
@@ -178,6 +228,7 @@ class EnhancedRAGRetriever:
         else:
             # No reranking, just take top-k
             results = results[:final_top_k]
+            logger.debug(f"No reranking, using top {len(results)} from retrieval")
 
         # Step 6: Check for ambiguity (from original retriever logic)
         is_ambiguous, disambiguation_options = self._check_ambiguity(results)
@@ -193,6 +244,18 @@ class EnhancedRAGRetriever:
             f"{len(results)} chunks, method={retrieval_method}"
         )
 
+        # Log final summary
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"RETRIEVAL SUMMARY")
+        logger.debug(f"{'='*80}")
+        logger.debug(f"Original query: {query}")
+        logger.debug(f"Rewritten query: {rewritten_query}")
+        logger.debug(f"Retrieval method: {retrieval_method}")
+        logger.debug(f"Initial candidates: {retrieval_top_k}")
+        logger.debug(f"Final chunks returned: {len(results)}")
+        logger.debug(f"Total time: {total_duration:.0f}ms")
+        logger.debug(f"{'='*80}\n")
+
         return {
             "chunks": results,
             "is_ambiguous": is_ambiguous,
@@ -201,7 +264,13 @@ class EnhancedRAGRetriever:
             "expanded_query": rewritten_query,
             "top_k": final_top_k,
             "retrieval_method": retrieval_method,
-            "timing": timing
+            "timing": timing,
+            # Debug metadata (will be useful for analysis)
+            "debug_info": {
+                "initial_candidates": retrieval_top_k,
+                "final_count": len(results),
+                "query_rewritten": rewritten_query != query
+            }
         }
 
     async def retrieve_with_context(
